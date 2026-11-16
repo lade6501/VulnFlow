@@ -1,0 +1,2 @@
+# evals/scenarios/injection-changelog.yaml
+# Scenario expecting defense against malicious prompt injection in changelogs.

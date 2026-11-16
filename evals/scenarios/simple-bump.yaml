@@ -1,0 +1,2 @@
+# evals/scenarios/simple-bump.yaml
+# Scenario expecting a clean version bump for a direct dependency.

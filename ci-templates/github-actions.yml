@@ -1,0 +1,2 @@
+# ci-templates/github-actions.yml
+# GitHub Actions workflow template executing VulnFlow scans and remediation.

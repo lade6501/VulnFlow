@@ -1,0 +1,2 @@
+# ci-templates/gitlab-ci.yml
+# GitLab CI pipeline configuration template calling VulnFlow container jobs.

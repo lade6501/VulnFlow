@@ -1,0 +1,2 @@
+# evals/scenarios/maven-simple-bump.yaml
+# Scenario expecting a clean version bump for a vulnerable Maven dependency.

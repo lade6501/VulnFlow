@@ -1,0 +1,4 @@
+/*
+ci-templates/Jenkinsfile
+Jenkins declarative pipeline template invoking the VulnFlow container.
+*/

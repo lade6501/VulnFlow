@@ -1,0 +1,2 @@
+# docker-compose.yml
+# Orchestrates local services including Neo4j, Qdrant, API service, and worker containers.

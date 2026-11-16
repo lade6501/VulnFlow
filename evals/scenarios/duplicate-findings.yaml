@@ -1,0 +1,2 @@
+# evals/scenarios/duplicate-findings.yaml
+# Scenario expecting duplicate scanner findings to be consolidated.

@@ -1,0 +1,2 @@
+# evals/scenarios/fix-breaks-tests.yaml
+# Scenario expecting patch rejection when tests fail during verification.

@@ -1,0 +1,2 @@
+# .github/workflows/ci.yml
+# Runs automated linting, test suites, and type checking on pull requests and pushes.

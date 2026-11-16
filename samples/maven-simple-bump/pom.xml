@@ -1,0 +1,4 @@
+<!--
+samples/maven-simple-bump/pom.xml
+Sample Maven POM with a seeded vulnerable direct library dependency.
+-->
