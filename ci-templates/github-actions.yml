@@ -1,2 +1,67 @@
 # ci-templates/github-actions.yml
 # GitHub Actions workflow template executing VulnFlow scans and remediation.
+
+name: VulnFlow Remediation Pipeline
+
+on:
+  schedule:
+    - cron: '0 2 * * 1-5'  # Run nightly Monday through Friday
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'VulnFlow execution mode'
+        required: true
+        default: 'pr'
+        type: choice
+        options:
+          - pr
+          - report
+          - dry-run
+
+jobs:
+  vulnflow-remediate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      security-events: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Run Security Scanner (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          format: 'json'
+          output: 'trivy-results.json'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+
+      - name: Run VulnFlow Remediation Engine
+        env:
+          VULNFLOW_LLM_PROVIDER: ${{ secrets.VULNFLOW_LLM_PROVIDER || 'nvidia' }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 -m pip install -e .
+          python3 -m vulnflow.cli analyze \
+            --report trivy-results.json \
+            --repo "$GITHUB_WORKSPACE" \
+            --mode "${{ inputs.mode || 'pr' }}"
+
+      - name: Upload Scan Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vulnflow-scan-report
+          path: trivy-results.json

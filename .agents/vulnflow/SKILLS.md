@@ -10,7 +10,7 @@ This file applies to every AI coding tool (Codex, Claude Code, Cursor, Copilot, 
 ## 0. How to use this file
 
 1. Read this file, then `features.md`.
-2. Find the feature ID (`F01` to `F41`) your task belongs to. If there is none, **stop and ask** (section 9).
+2. Find the feature ID (`F01` to `F42`) your task belongs to. If there is none, **stop and ask** (section 9).
 3. Change only the paths listed for that feature in `features.md`.
 4. Follow the layer rules (section 3), conventions (section 4) and the matching recipe (section 7).
 5. Run the checks (section 8) and update the feature status.
@@ -62,11 +62,12 @@ Layout is defined in `docs/architecture.md` and scaffolded under `vulnflow/`. Do
 | `contracts/`                   | Pydantic schemas only, no logic                                 | nothing                                            |
 | `adapters/`                    | Translate external formats to and from contracts                | `contracts`                                        |
 | `core/`, `policy/`             | Deterministic logic                                             | `contracts`                                        |
-| `knowledge/`                   | Vector and graph retrieval, advisory sources, providers         | `contracts`                                        |
+| `llm/`                         | Provider-agnostic model and embedding access, output validation, redaction guard | `contracts`, `core`, `observability`               |
+| `knowledge/`                   | Vector and graph retrieval, advisory sources, providers         | `contracts`, `llm`                                 |
 | `store/`                       | Run store models and persistence                                | `contracts`                                        |
 | `sandbox/`                     | Ephemeral clone, build and test runner                          | `contracts`                                        |
 | `mcp_servers/`                 | Expose tools over MCP                                           | `core`, `policy`, `knowledge`, `sandbox`, `store`  |
-| `agents/`                      | LLM reasoning; reaches side effects only through the MCP client | `contracts`, MCP client                            |
+| `agents/`                      | LLM reasoning; reaches side effects only through the MCP client | `contracts`, `llm`, MCP client                     |
 | `orchestrator/`                | LangGraph state machine, routing, approval                      | `agents`, `contracts`, `store`                     |
 | `reporting/`, `observability/` | Output, tracing, audit, cost                                    | `contracts`                                        |
 | `api/`                         | FastAPI over the run store                                      | `store`, `contracts`, `orchestrator` (resume only) |
@@ -75,6 +76,15 @@ Layout is defined in `docs/architecture.md` and scaffolded under `vulnflow/`. Do
 
 Hard boundaries:
 
+- Nothing outside `llm/` imports a vendor LLM SDK.
+- Agents must access models exclusively through the centralized `LLMClient` abstraction.
+- Agents must not instantiate provider SDK clients directly.
+- Provider and model selection must be configuration-driven and role-based.
+- All outbound prompts must pass through the centralized redaction guard.
+- Structured model outputs must be validated before downstream processing.
+- Usage information, including tokens, latency, and cost where available, must be available to observability.
+- Embeddings must use the centralized embedding abstraction.
+- LangChain and LangGraph model integrations, if used, must be wrapped behind the LLM abstraction.
 - Agents never import `policy`, `sandbox`, git libraries or HTTP clients for repo hosts. They call MCP tools.
 - Nothing imports upward (for example `contracts` never imports `core`).
 - The UI never reads the database or calls MCP servers directly.

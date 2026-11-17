@@ -22,7 +22,7 @@ Paths are relative to `src/vulnflow/` unless they start with `api/`, `ui/`, `har
 
 ## Scope boundaries
 
-**In scope:** all features F01 to F41 below.
+**In scope:** all features F01 to F42 below.
 
 **Out of scope (do not build, do not scaffold, do not stub):**
 
@@ -37,10 +37,10 @@ Paths are relative to `src/vulnflow/` unless they start with `api/`, `ui/`, `har
 
 | ID | Feature | Phase | Primary paths | Depends on | Acceptance criteria | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| F01 | Scanner adapters | P1, P3 | `adapters/input/trivy.py`, `sarif.py`, then `grype.py`, `osv.py`, `gitleaks.py` | F02 | Trivy and SARIF fixtures parse into valid `Finding` lists; P3 adds Grype, OSV-Scanner and Gitleaks the same way; malformed input yields a typed error | todo |
-| F02 | Finding normalization | P1 | `contracts/finding.py` | none | One `Finding` schema validates all adapter outputs; ID is a stable hash of scanner, repo, package, version, CVE and location | todo |
-| F03 | Deduplication | P1 | `core/dedupe.py` | F02 | Same finding from two scanners or two runs collapses to one; counts before and after are reported | todo |
-| F04 | Secret redaction | P1 | `core/redaction.py` | F02 | Seeded fake secrets never appear in `Finding`, state, logs or prompts; only type, location and fingerprint remain | todo |
+| F01 | Scanner adapters | P1, P3 | `adapters/input/trivy.py`, `sarif.py`, then `grype.py`, `osv.py`, `gitleaks.py` | F02 | Trivy and SARIF fixtures parse into valid `Finding` lists; P3 adds Grype, OSV-Scanner and Gitleaks the same way; malformed input yields a typed error | done |
+| F02 | Finding normalization | P1 | `contracts/finding.py` | none | One `Finding` schema validates all adapter outputs; ID is a stable hash of scanner, repo, package, version, CVE and location | done |
+| F03 | Deduplication | P1 | `core/dedupe.py` | F02 | Same finding from two scanners or two runs collapses to one; counts before and after are reported | done |
+| F04 | Secret redaction | P1 | `core/redaction.py` | F02 | Seeded fake secrets never appear in `Finding`, state, logs or prompts; only type, location and fingerprint remain | done |
 
 ## 3.2 Analysis and intelligence
 
@@ -48,7 +48,7 @@ Paths are relative to `src/vulnflow/` unless they start with `api/`, `ui/`, `har
 | --- | --- | --- | --- | --- | --- | --- |
 | F05 | Root-cause grouping | P2 | `knowledge/graph/queries.py`, `agents/rootcause.py` | F03 | `root_cause` collapses a transitive-only sample to one parent dependency and explains it | todo |
 | F06 | Blast-radius query | P2 | `knowledge/graph/queries.py`, `mcp_servers/knowledge_server.py` | F05 | `blast_radius` returns the services and repos affected by a package change on the seeded graph | todo |
-| F07 | Advisory-grounded impact analysis | P2 | `knowledge/vector/`, `knowledge/sources/`, `agents/planner.py` | F10 | `advisory_search` returns the right advisory and release-note chunks filtered by package; plan rationale cites chunk IDs | todo |
+| F07 | Advisory-grounded impact analysis | P2 | `knowledge/vector/`, `knowledge/sources/`, `agents/planner.py` | F10, F42 | `advisory_search` returns the right advisory and release-note chunks filtered by package; plan rationale cites chunk IDs | todo |
 | F08 | Risk scoring and tiering | P2 | `core/risk.py`, `policies/risk_tiers.yaml` | F10 | Tier is computed by code from policy, bump size, tests and evidence; the model can only make it stricter | todo |
 | F09 | Findings report | P2 | `reporting/markdown.py`, `json_report.py`, `pr_comment.py` | F05 | Markdown and JSON reports group findings by root cause and show policy result and tier | todo |
 
@@ -56,8 +56,8 @@ Paths are relative to `src/vulnflow/` unless they start with `api/`, `ui/`, `har
 
 | ID | Feature | Phase | Primary paths | Depends on | Acceptance criteria | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| F10 | Approved-package check | P1 | `policy/engine.py`, `mcp_servers/policy_server.py`, `policies/approved_packages.yaml` | F02 | `policy_check` returns approved, deprecated, banned, unknown or license_denied with rule and replacement; deterministic; table-driven tests pass | todo |
-| F11 | Fix-candidate filtering | P1 | `policy/engine.py`, `mcp_servers/policy_server.py` | F10 | `policy_candidates` removes every version the policy rejects; the unapproved-fix sample yields no candidates | todo |
+| F10 | Approved-package check | P1 | `policy/engine.py`, `mcp_servers/policy_server.py`, `policies/approved_packages.yaml` | F02 | `policy_check` returns approved, deprecated, banned, unknown or license_denied with rule and replacement; deterministic; table-driven tests pass | done |
+| F11 | Fix-candidate filtering | P1 | `policy/engine.py`, `mcp_servers/policy_server.py` | F10 | `policy_candidates` removes every version the policy rejects; the unapproved-fix sample yields no candidates | done |
 | F12 | Replacement proposals | P2 | `policy/engine.py`, `agents/planner.py` | F10 | Deprecated or banned package gets the approved replacement in the plan with tier `review` | todo |
 | F13 | Exception workflow | P2 | `mcp_servers/ticket_server.py`, `orchestrator/nodes.py`, `orchestrator/routing.py` | F11 | When only unapproved fixes exist, a ticket with CVE context is created, no PR is opened, and a rerun creates no duplicate | todo |
 | F14 | Registry availability check | P2 | `mcp_servers/registry_server.py` | F10 | `registry_check` confirms the target version exists in the configured registry before a PR | todo |
@@ -67,10 +67,10 @@ Paths are relative to `src/vulnflow/` unless they start with `api/`, `ui/`, `har
 
 | ID | Feature | Phase | Primary paths | Depends on | Acceptance criteria | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| F16 | Fix planner | P1 | `agents/planner.py`, `contracts/remediation_plan.py` | F11 | Produces a valid `RemediationPlan` chosen from policy-allowed candidates only | todo |
-| F17 | Sandboxed execution | P1 | `sandbox/runner.py`, `mcp_servers/git_server.py` | F16 | Clone, branch and patch run in an ephemeral container with scoped token and no production secrets | todo |
-| F18 | Build and test runner | P1 | `sandbox/runner.py`, `mcp_servers/build_server.py`, `adapters/ecosystem/npm.py` | F17 | `build_test` returns build and test results for the patched branch, with timeouts | todo |
-| F19 | PR creation | P1 | `mcp_servers/git_server.py`, `reporting/pr_comment.py` | F18 | `pr_create` opens a PR with root cause, evidence, policy status and test results; rerun does not duplicate it | todo |
+| F16 | Fix planner | P1 | `agents/planner.py`, `contracts/remediation_plan.py` | F11, F42 | Produces a valid `RemediationPlan` chosen from policy-allowed candidates only | done |
+| F17 | Sandboxed execution | P1 | `sandbox/runner.py`, `mcp_servers/git_server.py` | F16 | Clone, branch and patch run in an ephemeral container with scoped token and no production secrets | done |
+| F18 | Build and test runner | P1 | `sandbox/runner.py`, `mcp_servers/build_server.py`, `adapters/ecosystem/npm.py` | F17 | `build_test` returns build and test results for the patched branch, with timeouts | done |
+| F19 | PR creation | P1 | `mcp_servers/git_server.py`, `reporting/pr_comment.py` | F18 | `pr_create` opens a PR with root cause, evidence, policy status and test results; rerun does not duplicate it | done |
 | F20 | Self-correction loop | P2 | `orchestrator/routing.py`, `agents/fixer.py` | F18 | Test failure retries with error context up to the configured limit, then escalates to `review` | todo |
 | F21 | Human approval gate | P2 | `orchestrator/approval.py`, `mcp_servers/notify_server.py` | F16 | Run pauses for review-tier plans, persists state, and resumes on approve or stops on reject with a stored reason | todo |
 | F22 | Verification | P2 | `agents/verifier.py`, `mcp_servers/scan_server.py` | F19 | `scan_diff` and a policy recheck on the full tree decide resolved or failed in code; a failed verify is never reported as success | todo |
@@ -88,8 +88,8 @@ Paths are relative to `src/vulnflow/` unless they start with `api/`, `ui/`, `har
 
 | ID | Feature | Phase | Primary paths | Depends on | Acceptance criteria | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| F27 | CLI and Docker image | P1 | `cli.py`, `Dockerfile` | F19 | `analyze`, `fix`, `verify`, `watch-expiry`, `report` work with modes `report`, `pr`, `dry-run`; exit codes match `skills.md` | todo |
-| F28 | GitHub Action | P1 | `ci-templates/github-actions.yml`, `adapters/ci/github_action/` | F27 | Action runs the scanner, calls the container and acts on the exit code on a sample repo | todo |
+| F27 | CLI and Docker image | P1 | `cli.py`, `Dockerfile` | F19 | `analyze`, `fix`, `verify`, `watch-expiry`, `report` work with modes `report`, `pr`, `dry-run`; exit codes match `skills.md` | done |
+| F28 | GitHub Action | P1 | `ci-templates/github-actions.yml`, `adapters/ci/github_action/` | F27 | Action runs the scanner, calls the container and acts on the exit code on a sample repo | done |
 | F29 | Jenkins and GitLab templates | P3 | `ci-templates/Jenkinsfile`, `ci-templates/gitlab-ci.yml` | F27 | Same container and scenarios pass from both templates | todo |
 | F30 | Webhook and API mode | P3 | `api/main.py`, `api/routes/` | F27 | A webhook triggers a run and returns a run ID retrievable through the API | todo |
 
@@ -97,11 +97,12 @@ Paths are relative to `src/vulnflow/` unless they start with `api/`, `ui/`, `har
 
 | ID | Feature | Phase | Primary paths | Depends on | Acceptance criteria | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| F31 | Tracing | P0, P4 | `observability/tracing.py` | none | Every node, agent call and MCP call is a span with model, prompt version, tokens, latency and status; backend swappable by config | todo |
-| F32 | Audit log | P4 | `observability/audit_log.py` | F31 | Append-only record of plans, policy decisions, approvals, PRs and verification results | todo |
+| F31 | Tracing | P0, P4 | `observability/tracing.py` | none | Every node, agent call and MCP call is a span with model, prompt version, tokens, latency and status; backend swappable by config | done |
+| F32 | Audit log | P4 | `observability/audit_log.py` | F31 | Append-only record of plans, policy decisions, approvals, PRs and verification results | done |
 | F33 | Failure handling | P4 | `orchestrator/`, `config.py` | F20 | Timeouts, retries with backoff and rate-limit handling; every run ends in a clear terminal status with no orphan branches, PRs or tickets | todo |
 | F34 | Prompt-injection defenses | P4 | `agents/prompts/`, `tests/security/` | F07 | Hostile changelog and advisory text does not change the plan; retrieved text is delimited as untrusted; the injection scenario passes | todo |
 | F35 | Evaluation harness | P5 | `evals/` | F22 | `make eval` runs all scenarios and writes metrics: auto-fix rate, dedupe ratio, time to verified fix, policy violations, bad-fix rate, cost per finding | todo |
+| F42 | LLM provider abstraction | P1 | `llm/` | F04, F31 | At least two providers selectable by config; structured outputs validated; outbound prompts pass the redaction guard; usage reported to tracing; record and replay works in tests | done |
 
 ## 3.8 User interface
 

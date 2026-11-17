@@ -1,0 +1,25 @@
+[
+  {
+    "SchemaVersion": 2,
+    "ArtifactName": "package-lock.json",
+    "ArtifactType": "npm",
+    "Metadata": {
+      "OS": {
+        "Family": "node",
+        "Name": "20.x"
+      }
+    },
+    "package": "npm:lodash",
+    "version": "4.17.15",
+    "cve": ["CVE-2020-8203"],
+    "severity": "HIGH",
+    "file_path": "package.json",
+    "fix_versions": ["4.17.21"],
+    "Title": "Prototype Pollution in lodash",
+    "Description": "Prototype pollution vulnerability in lodash before 4.17.21 allows attackers to cause a denial of service or code execution.",
+    "References": [
+      "https://nvd.nist.gov/vuln/detail/CVE-2020-8203",
+      "https://github.com/lodash/lodash/issues/4837"
+    ]
+  }
+]

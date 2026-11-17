@@ -1,0 +1,11 @@
+{
+  "name": "sample-npm-service",
+  "version": "1.0.0",
+  "description": "Sample vulnerable service for VulnFlow Phase 0 and 1 verification",
+  "dependencies": {
+    "lodash": "4.17.21"
+  },
+  "scripts": {
+    "test": "node -e \"process.exit(0)\""
+  }
+}

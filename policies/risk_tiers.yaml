@@ -1,2 +1,30 @@
 # policies/risk_tiers.yaml
 # Defines organizational risk tier thresholds, SLAs, and approval policies.
+
+tiers:
+  auto:
+    description: "Low-risk patch changes that can be merged automatically or opened directly as PRs"
+    allowed_bump_types:
+      - patch
+    allow_transitive_only: true
+    require_all_tests_green: true
+    require_policy_approved: true
+    max_cvss: 7.0
+
+  review:
+    description: "Medium-to-high risk changes requiring human reviewer sign-off"
+    triggers:
+      - minor_bump
+      - major_bump
+      - direct_dependency_change
+      - unknown_package_policy
+      - breaking_changes_detected
+    sla_hours: 48
+
+  blocked:
+    description: "Prohibited actions requiring security architecture exception"
+    triggers:
+      - banned_package
+      - denied_license
+      - no_approved_version_available
+      - secret_rotation_failure

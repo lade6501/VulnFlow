@@ -1,0 +1,10 @@
+[
+  {
+    "package": "npm:left-pad",
+    "version": "1.3.0",
+    "cve": ["CVE-2020-28469"],
+    "severity": "HIGH",
+    "file_path": "package.json",
+    "fix_versions": []
+  }
+]
