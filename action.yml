@@ -1,0 +1,101 @@
+# action.yml
+# GitHub Actions composite action for running VulnFlow remediation pipelines.
+
+name: 'VulnFlow Security Remediation'
+description: 'Autonomous vulnerability remediation engine that ingests security scanner findings, groups by root cause, applies policy, verifies fixes in sandboxes, and opens PRs.'
+author: 'VulnFlow Team'
+
+inputs:
+  report:
+    description: 'Path to scanner report (JSON or SARIF from Trivy, Grype, Snyk, CodeQL, etc.)'
+    required: true
+  repo-path:
+    description: 'Target repository directory path'
+    required: false
+    default: '.'
+  mode:
+    description: 'Execution mode: "pr" (open PRs), "report" (markdown/json report only), or "dry-run"'
+    required: false
+    default: 'pr'
+  scanner:
+    description: 'Scanner type: trivy, sarif, grype, osv, gitleaks, snyk'
+    required: false
+    default: 'trivy'
+  auto-approve:
+    description: 'Whether to auto-approve review-tier plans without halting for manual approval'
+    required: false
+    default: 'false'
+  output:
+    description: 'File path to save the generated report'
+    required: false
+    default: 'vulnflow-report.md'
+  format:
+    description: 'Report format: markdown or json'
+    required: false
+    default: 'markdown'
+  github-token:
+    description: 'GitHub token for creating branches and opening Pull Requests'
+    required: false
+    default: ${{ github.token }}
+  llm-provider:
+    description: 'LLM provider (nvidia, openrouter, anthropic, openai)'
+    required: false
+    default: 'nvidia'
+  nvidia-api-key:
+    description: 'NVIDIA NIM API key'
+    required: false
+    default: ''
+  openai-api-key:
+    description: 'OpenAI API key'
+    required: false
+    default: ''
+
+outputs:
+  exit-code:
+    description: 'Exit code from VulnFlow run (0: Success, 10: Pending Approval, 20: Blocked Policy)'
+    value: ${{ steps.run-vulnflow.outputs.exit_code }}
+  report-path:
+    description: 'Path where the summary report was saved'
+    value: ${{ inputs.output }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install VulnFlow
+      shell: bash
+      run: |
+        python3 -m pip install --upgrade pip
+        python3 -m pip install "${{ github.action_path }}"
+
+    - name: Execute VulnFlow Remediation
+      id: run-vulnflow
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        VULNFLOW_LLM_PROVIDER: ${{ inputs.llm-provider }}
+        NVIDIA_API_KEY: ${{ inputs.nvidia-api-key }}
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+      run: |
+        ARGS="--report ${{ inputs.report }} --repo ${{ inputs.repo-path }} --mode ${{ inputs.mode }} --scanner ${{ inputs.scanner }} --output ${{ inputs.output }} --format ${{ inputs.format }}"
+        if [ "${{ inputs.auto-approve }}" = "true" ]; then
+          ARGS="$ARGS --auto-approve"
+        fi
+
+        set +e
+        vulnflow analyze $ARGS
+        EXIT_CODE=$?
+        set -e
+
+        echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+        if [ "$EXIT_CODE" -eq 10 ]; then
+          echo "::warning::VulnFlow paused at Human Approval Gate (exit code 10). One or more remediation plans require human review."
+        elif [ "$EXIT_CODE" -eq 20 ]; then
+          echo "::notice::VulnFlow blocked by policy (exit code 20). Policy exception ticket generated."
+        elif [ "$EXIT_CODE" -ne 0 ]; then
+          exit $EXIT_CODE
+        fi

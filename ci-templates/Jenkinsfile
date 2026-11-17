@@ -2,3 +2,50 @@
 ci-templates/Jenkinsfile
 Jenkins declarative pipeline template invoking the VulnFlow container.
 */
+
+pipeline {
+    agent {
+        docker {
+            image 'vulnflow/engine:latest'
+            args '-u root:root'
+        }
+    }
+
+    environment {
+        GITHUB_TOKEN = credentials('github-service-token')
+        NVIDIA_API_KEY = credentials('nvidia-api-key')
+    }
+
+    stages {
+        stage('Security Scan') {
+            steps {
+                sh 'trivy fs --format json --output trivy-results.json --severity CRITICAL,HIGH --exit-code 0 .'
+            }
+        }
+
+        stage('VulnFlow Remediation') {
+            steps {
+                script {
+                    def statusCode = sh(
+                        script: 'vulnflow analyze --report trivy-results.json --repo . --mode pr --output vulnflow-report.md',
+                        returnStatus: true
+                    )
+                    if (statusCode == 10) {
+                        echo "WARNING: VulnFlow paused for human approval gate (exit code 10)."
+                        currentBuild.result = 'UNSTABLE'
+                    } else if (statusCode == 20) {
+                        echo "NOTICE: VulnFlow blocked by policy (exit code 20). Ticket created."
+                    } else if (statusCode != 0) {
+                        error("VulnFlow failed with unexpected status code ${statusCode}")
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: 'vulnflow-report.md,trivy-results.json,.vulnflow/**', allowEmptyArchive: true
+        }
+    }
+}

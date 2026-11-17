@@ -313,6 +313,32 @@ def cmd_audit(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_watch_expiry(args: argparse.Namespace) -> int:
+    """Inspect and alert on expiring certificates, tokens, or policy waivers."""
+    from vulnflow.agents.expiry import default_expiry_agent
+
+    logger.info("Scanning repository %s for expiring artifacts (warning window: %d days)", args.repo, args.days)
+    if getattr(args, "auto_renew", False):
+        results = default_expiry_agent.automate_renewals(repo_path=args.repo, warning_days=args.days)
+    else:
+        results = default_expiry_agent.scan_expiring_artifacts(repo_path=args.repo, warning_days=args.days)
+
+    print("\n" + "=" * 68)
+    print(f"⏳  VulnFlow Expiry Monitor [{len(results)} artifact(s) found]")
+    print("=" * 68)
+    for idx, item in enumerate(results, 1):
+        status = item.get("status", "EXPIRING").upper()
+        print(f"  [{idx}] {item.get('name')} ({item.get('type')}) - Expires in {item.get('days_remaining')} day(s) [{status}]")
+        print(f"      • Expiry Date:  {item.get('expires_at')}")
+        print(f"      • Risk Window:  {item.get('risk_window')}")
+        if item.get("action"):
+            print(f"      • Action:       {item.get('action')}")
+        if item.get("ticket"):
+            print(f"      • Ticket:       {item.get('ticket', {}).get('ticket_id')}")
+    print("=" * 68 + "\n")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="vulnflow", description="AI-driven vulnerability remediation engine")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -367,6 +393,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_audit = subparsers.add_parser("audit", help="Inspect chronological audit trail of a run")
     p_audit.add_argument("--run-id", help="Run ID to inspect (defaults to latest)")
     p_audit.set_defaults(func=cmd_audit)
+
+    # watch-expiry
+    p_watch = subparsers.add_parser("watch-expiry", help="Inspect and alert on expiring certificates, tokens, or waivers")
+    p_watch.add_argument("--repo", default=".", help="Repository directory path")
+    p_watch.add_argument("--days", type=int, default=30, help="Warning window in days (default: 30)")
+    p_watch.add_argument("--auto-renew", action="store_true", help="Automatically open renewal tickets for expiring artifacts")
+    p_watch.set_defaults(func=cmd_watch_expiry)
 
     parsed = parser.parse_args(argv)
     return parsed.func(parsed)

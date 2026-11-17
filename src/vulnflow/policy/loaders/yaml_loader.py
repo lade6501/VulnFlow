@@ -41,15 +41,11 @@ def parse_simple_yaml(content: str) -> Dict[str, Any]:
         if not line_stripped or line_stripped.startswith("#"):
             continue
 
-        if line_stripped.startswith("packages:"):
-            current_section = "packages"
-            continue
-        elif line_stripped.startswith("rules:"):
-            current_section = "rules"
-            current_pkg = None
-            continue
-        elif line_stripped.startswith("tiers:") or line_stripped.startswith("allowed:") or line_stripped.startswith("denied:"):
+        if line_stripped.endswith(":") and not line_stripped.startswith("- "):
             current_section = line_stripped.rstrip(":")
+            current_pkg = None
+            if current_section not in result:
+                result[current_section] = []
             continue
 
         if current_section == "packages":
@@ -79,6 +75,28 @@ def parse_simple_yaml(content: str) -> Dict[str, Any]:
                     result["rules"][k] = False
                 else:
                     result["rules"][k] = v
+
+        elif current_section is not None:
+            if line_stripped.startswith("- "):
+                item_val = line_stripped[2:].strip().strip("'\"")
+                if ":" in item_val:
+                    current_pkg = {}
+                    if not isinstance(result.get(current_section), list):
+                        result[current_section] = []
+                    result[current_section].append(current_pkg)
+                    k, v = item_val.split(":", 1)
+                    current_pkg[k.strip()] = v.strip().strip("'\"")
+                elif isinstance(result.get(current_section), list):
+                    current_pkg = None
+                    result[current_section].append(item_val)
+            elif current_pkg is not None and ":" in line_stripped:
+                k, v = line_stripped.split(":", 1)
+                current_pkg[k.strip()] = v.strip().strip("'\"")
+            elif ":" in line_stripped:
+                k, v = line_stripped.split(":", 1)
+                if not isinstance(result.get(current_section), dict):
+                    result[current_section] = {}
+                result[current_section][k.strip()] = v.strip().strip("'\"")
 
     return result
 

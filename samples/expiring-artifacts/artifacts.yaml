@@ -1,2 +1,18 @@
 # samples/expiring-artifacts/artifacts.yaml
 # Sample artifact definition containing expired package waivers and tokens.
+
+artifacts:
+  - name: "production-ingress-tls"
+    type: "certificate"
+    expires_at: "2026-11-20T00:00:00Z"
+    description: "TLS wildcard certificate for production ingress controller."
+
+  - name: "temporary-lodash-exception"
+    type: "policy_waiver"
+    expires_at: "2026-11-25T00:00:00Z"
+    description: "Temporary policy waiver granted for CVE-2020-8203."
+
+  - name: "datadog-api-key"
+    type: "api_token"
+    expires_at: "2027-12-31T00:00:00Z"
+    description: "Long-term monitoring API token."

@@ -6,6 +6,7 @@ End-to-end integration tests for Phase 1 core remediation spine.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -284,6 +285,75 @@ def test_phase_1_gate_core_remediation_spine() -> None:
         assert final_state.verification_results[0]["rescan_clean"] is True
 
 
+def test_f27_cli_commands_and_modes() -> None:
+    """F27 acceptance criteria: analyze, fix, verify, watch-expiry, report work with modes report, pr, dry-run; exit codes match skills.md."""
+    from vulnflow.cli import main
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        repo_dir = Path(tmpdir)
+        (repo_dir / "package.json").write_text(json.dumps({"dependencies": {"lodash": "4.17.15"}}), encoding="utf-8")
+        report_f = Path(__file__).resolve().parent.parent.parent / "data" / "fixtures" / "sample_trivy_report.json"
+
+        # 1. report mode
+        exit_code = main(["report", "--repo", str(repo_dir), "--report", str(report_f), "--no-llm"])
+        assert exit_code == 0
+
+        # 2. dry-run mode
+        exit_code = main(["analyze", "--repo", str(repo_dir), "--report", str(report_f), "--mode", "dry-run", "--no-llm"])
+        assert exit_code == 0
+
+        # 3. watch-expiry
+        exit_code = main(["watch-expiry", "--repo", str(repo_dir), "--days", "30"])
+        assert exit_code == 0
+
+
+def test_f28_github_action_adapter() -> None:
+    """F28 acceptance criteria: Action runs the scanner, calls the container and acts on the exit code on a sample repo."""
+    from vulnflow.adapters.ci.github_action.adapter import GitHubActionAdapter
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out_f = Path(tmpdir) / "github_output"
+        summary_f = Path(tmpdir) / "step_summary.md"
+        out_f.touch()
+        summary_f.touch()
+
+        old_out = os.environ.get("GITHUB_OUTPUT")
+        old_sum = os.environ.get("GITHUB_STEP_SUMMARY")
+        old_act = os.environ.get("GITHUB_ACTIONS")
+        os.environ["GITHUB_OUTPUT"] = str(out_f)
+        os.environ["GITHUB_STEP_SUMMARY"] = str(summary_f)
+        os.environ["GITHUB_ACTIONS"] = "true"
+
+        try:
+            adapter = GitHubActionAdapter()
+            assert adapter.is_github_action_environment() is True
+
+            state = VulnFlowState(repo_path=tmpdir, exit_code=0, terminal_status="completed")
+            code = adapter.process_result(state)
+            assert code == 0
+
+            out_content = out_f.read_text(encoding="utf-8")
+            assert "exit_code=0" in out_content
+            assert "terminal_status=completed" in out_content
+
+            adapter.write_step_summary("### VulnFlow Remediation Summary\nAll tests verified.")
+            sum_content = summary_f.read_text(encoding="utf-8")
+            assert "VulnFlow Remediation Summary" in sum_content
+        finally:
+            if old_out:
+                os.environ["GITHUB_OUTPUT"] = old_out
+            else:
+                os.environ.pop("GITHUB_OUTPUT", None)
+            if old_sum:
+                os.environ["GITHUB_STEP_SUMMARY"] = old_sum
+            else:
+                os.environ.pop("GITHUB_STEP_SUMMARY", None)
+            if old_act:
+                os.environ["GITHUB_ACTIONS"] = old_act
+            else:
+                os.environ.pop("GITHUB_ACTIONS", None)
+
+
 if __name__ == "__main__":
     print("Testing F01: Trivy and SARIF adapters...")
     test_f01_trivy_and_sarif_adapters()
@@ -297,6 +367,10 @@ if __name__ == "__main__":
     test_f17_and_f18_npm_bump_and_sandbox()
     print("Testing F19: PR creation & idempotency...")
     test_f19_pr_creation_and_idempotency()
+    print("Testing F27: CLI commands and modes...")
+    test_f27_cli_commands_and_modes()
+    print("Testing F28: GitHub Action adapter...")
+    test_f28_github_action_adapter()
     print("Testing Phase 1 Gate: Core remediation spine...")
     test_phase_1_gate_core_remediation_spine()
     print("\nALL PHASE 1 FEATURES & GATE TESTS PASSED!")

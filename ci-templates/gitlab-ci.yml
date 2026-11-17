@@ -1,2 +1,44 @@
 # ci-templates/gitlab-ci.yml
 # GitLab CI pipeline configuration template calling VulnFlow container jobs.
+
+stages:
+  - test
+  - scan
+  - remediate
+
+security_scan:
+  stage: scan
+  image:
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+  script:
+    - trivy fs --format json --output trivy-results.json --severity CRITICAL,HIGH --exit-code 0 .
+  artifacts:
+    paths:
+      - trivy-results.json
+    expire_in: 1 week
+
+vulnflow_remediate:
+  stage: remediate
+  image: vulnflow/engine:latest
+  dependencies:
+    - security_scan
+  script:
+    - |
+      set +e
+      vulnflow analyze --report trivy-results.json --repo . --mode pr --output vulnflow-report.md
+      EXIT_CODE=$?
+      set -e
+      if [ $EXIT_CODE -eq 10 ]; then
+        echo "VulnFlow paused at approval gate; review-tier changes require manual sign-off."
+      elif [ $EXIT_CODE -eq 20 ]; then
+        echo "VulnFlow blocked by policy; exception ticket created."
+      elif [ $EXIT_CODE -ne 0 ]; then
+        exit $EXIT_CODE
+      fi
+  artifacts:
+    when: always
+    paths:
+      - vulnflow-report.md
+      - .vulnflow/
+    expire_in: 1 week

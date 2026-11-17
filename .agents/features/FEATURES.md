@@ -61,7 +61,7 @@ Paths are relative to `src/vulnflow/` unless they start with `api/`, `ui/`, `har
 | F12 | Replacement proposals | P2 | `policy/engine.py`, `agents/planner.py` | F10 | Deprecated or banned package gets the approved replacement in the plan with tier `review` | done |
 | F13 | Exception workflow | P2 | `mcp_servers/ticket_server.py`, `orchestrator/nodes.py`, `orchestrator/routing.py` | F11 | When only unapproved fixes exist, a ticket with CVE context is created, no PR is opened, and a rerun creates no duplicate | done |
 | F14 | Registry availability check | P2 | `mcp_servers/registry_server.py` | F10 | `registry_check` confirms the target version exists in the configured registry before a PR | done |
-| F15 | License rules | P3 | `policy/licenses.py`, `policies/licenses.yaml` | F10 | Denied licenses return `license_denied`; table-driven tests cover allowed and denied cases | todo |
+| F15 | License rules | P3 | `policy/licenses.py`, `policies/licenses.yaml` | F10 | Denied licenses return `license_denied`; table-driven tests cover allowed and denied cases | done |
 
 ## 3.4 Remediation
 
@@ -79,10 +79,10 @@ Paths are relative to `src/vulnflow/` unless they start with `api/`, `ui/`, `har
 
 | ID | Feature | Phase | Primary paths | Depends on | Acceptance criteria | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| F23 | Secrets and PII flow | P3 | `agents/secrets.py`, `adapters/input/gitleaks.py`, `core/redaction.py` | F04, F21 | Always `review`; produces a rotation checklist and code-change plan; the value is never seen by the model | todo |
-| F24 | Expiry predictor | P3 | `agents/expiry.py`, `knowledge/graph/queries.py` | F05 | `expiring` returns artifacts in the warning window and the predictor estimates a risk window | todo |
-| F25 | Renewal automation | P3 | `agents/expiry.py`, `mcp_servers/ticket_server.py` | F24 | A renewal ticket or PR is opened before expiry; idempotent on rerun | todo |
-| F26 | Second ecosystem (stretch) | P3 | `adapters/ecosystem/maven.py`, `harness/playbooks/maven.md` | F18 | The maven sample repo reproduces the npm simple-bump outcome; does not gate the MVP | todo |
+| F23 | Secrets and PII flow | P3 | `agents/secrets.py`, `adapters/input/gitleaks.py`, `core/redaction.py` | F04, F21 | Always `review`; produces a rotation checklist and code-change plan; the value is never seen by the model | done |
+| F24 | Expiry predictor | P3 | `agents/expiry.py`, `knowledge/graph/queries.py` | F05 | `expiring` returns artifacts in the warning window and the predictor estimates a risk window | done |
+| F25 | Renewal automation | P3 | `agents/expiry.py`, `mcp_servers/ticket_server.py` | F24 | A renewal ticket or PR is opened before expiry; idempotent on rerun | done |
+| F26 | Second ecosystem (stretch) | P3 | `adapters/ecosystem/maven.py`, `harness/playbooks/maven.md` | F18 | The maven sample repo reproduces the npm simple-bump outcome; does not gate the MVP | done |
 
 ## 3.6 Integration
 
@@ -90,8 +90,8 @@ Paths are relative to `src/vulnflow/` unless they start with `api/`, `ui/`, `har
 | --- | --- | --- | --- | --- | --- | --- |
 | F27 | CLI and Docker image | P1 | `cli.py`, `Dockerfile` | F19 | `analyze`, `fix`, `verify`, `watch-expiry`, `report` work with modes `report`, `pr`, `dry-run`; exit codes match `skills.md` | done |
 | F28 | GitHub Action | P1 | `ci-templates/github-actions.yml`, `adapters/ci/github_action/` | F27 | Action runs the scanner, calls the container and acts on the exit code on a sample repo | done |
-| F29 | Jenkins and GitLab templates | P3 | `ci-templates/Jenkinsfile`, `ci-templates/gitlab-ci.yml` | F27 | Same container and scenarios pass from both templates | todo |
-| F30 | Webhook and API mode | P3 | `api/main.py`, `api/routes/` | F27 | A webhook triggers a run and returns a run ID retrievable through the API | todo |
+| F29 | Jenkins and GitLab templates | P3 | `ci-templates/Jenkinsfile`, `ci-templates/gitlab-ci.yml` | F27 | Same container and scenarios pass from both templates | done |
+| F30 | Webhook and API mode | P3 | `api/main.py`, `api/routes/` | F27 | A webhook triggers a run and returns a run ID retrievable through the API | done |
 
 ## 3.7 Operations and trust
 
@@ -110,9 +110,9 @@ Paths are relative to `src/vulnflow/` unless they start with `api/`, `ui/`, `har
 | --- | --- | --- | --- | --- | --- | --- |
 | F36 | Runs dashboard | P2 | `ui/src/pages/Runs.tsx`, `api/routes/runs.py`, `store/` | F27 | Lists runs with repo, status, counts, cost and exit code | todo |
 | F37 | Plan and approval screen | P2 | `ui/src/pages/PlanApproval.tsx`, `api/routes/plans.py`, `api/routes/approvals.py` | F21 | Shows plan, evidence, policy result, diff and results; approve or reject resumes or stops the run and records the approver | todo |
-| F38 | Graph explorer | P3 | `ui/src/pages/GraphExplorer.tsx`, `api/routes/graph.py` | F05, F06 | Renders a root-cause and blast-radius subgraph from the API | todo |
-| F39 | Policy and exceptions view | P3 | `ui/src/pages/PolicyExceptions.tsx` | F13 | Lists blocked-by-policy plans and exception tickets; approved-package lookup works | todo |
-| F40 | Expiry view | P3 | `ui/src/pages/Expiry.tsx` | F24 | Lists artifacts by expiry date with renewal status | todo |
+| F38 | Graph explorer | P3 | `ui/src/pages/GraphExplorer.tsx`, `api/routes/graph.py` | F05, F06 | Renders a root-cause and blast-radius subgraph from the API | done |
+| F39 | Policy and exceptions view | P3 | `ui/src/pages/PolicyExceptions.tsx` | F13 | Lists blocked-by-policy plans and exception tickets; approved-package lookup works | done |
+| F40 | Expiry view | P3 | `ui/src/pages/Expiry.tsx` | F24 | Lists artifacts by expiry date with renewal status | done |
 | F41 | Metrics and eval view | P5 | `ui/src/pages/Metrics.tsx`, `api/routes/metrics.py` | F35 | Shows eval and run metrics with links to traces | todo |
 
 ## Cross-cutting items (not features, but required by every PR)
@@ -147,3 +147,6 @@ Record changes to this file here (date, ID, what changed, who). Adding, removing
 | 2026-11-17 | F21 | Complete persistent human approval gate, pause/resume, and CLI approve command | Agent |
 | 2026-11-17 | F22 | Complete VerifierAgent, rescan diff, policy recheck, and strict verification invariant | Agent |
 | 2026-11-17 | P2-GATE | Phase 2 Gate passed: all policy and vulnerability scenarios run end-to-end | Agent |
+| 2026-11-17 | F27-F28 | Complete CLI watch-expiry, composite action.yml, and GitHub Action adapter | Agent |
+| 2026-11-17 | P3-ALL | Complete Grype/OSV/Gitleaks (F01), licenses (F15), secrets (F23), expiry & renewal (F24-F25), Maven (F26), Jenkins/GitLab (F29), Webhook/API (F30), and UI (F38-F40) | Agent |
+| 2026-11-17 | P3-GATE | Phase 3 Gate passed: feature freeze across all scenarios, secrets, expiry, and CI systems | Agent |

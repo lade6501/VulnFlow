@@ -12,6 +12,10 @@ import subprocess
 
 from vulnflow.adapters.ecosystem.npm import NPMAdapter
 from vulnflow.adapters.ecosystem.pip import PipAdapter
+from vulnflow.adapters.input.gitleaks import GitleaksAdapter
+from vulnflow.adapters.input.grype import GrypeAdapter
+from vulnflow.adapters.input.osv import OSVAdapter
+from vulnflow.adapters.input.sarif import SARIFAdapter
 from vulnflow.adapters.input.trivy import TrivyAdapter
 from vulnflow.agents.fixer import default_fixer_agent
 from vulnflow.agents.planner import default_planner_agent
@@ -50,11 +54,22 @@ def ingest_node(state: VulnFlowState) -> VulnFlowState:
         findings: List[Finding] = []
 
         if state.report_path and Path(state.report_path).exists():
-            adapter = TrivyAdapter(default_ecosystem=state.ecosystem)
+            s_name = (state.scanner or "trivy").lower()
+            if "sarif" in s_name or state.report_path.endswith(".sarif"):
+                adapter = SARIFAdapter()
+            elif "grype" in s_name:
+                adapter = GrypeAdapter(default_ecosystem=state.ecosystem)
+            elif "osv" in s_name:
+                adapter = OSVAdapter(default_ecosystem=state.ecosystem)
+            elif "gitleaks" in s_name or "secret" in s_name:
+                adapter = GitleaksAdapter()
+            else:
+                adapter = TrivyAdapter(default_ecosystem=state.ecosystem)
+
             try:
                 findings = adapter.parse_file(state.report_path, repo=state.repo_path)
             except Exception as exc:
-                logger.warning("TrivyAdapter failed to parse %s: %s; using scanner tool", state.report_path, exc)
+                logger.warning("Adapter %s failed to parse %s: %s; using scanner tool", adapter.__class__.__name__, state.report_path, exc)
 
         if not findings:
             raw_scan_results = scan_server.scan_run(repo=state.repo_path, scanner=state.scanner)
