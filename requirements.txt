@@ -1,0 +1,5 @@
+# requirements.txt
+# Core runtime dependencies for VulnFlow
+
+pyyaml>=6.0
+pydantic>=2.0.0
