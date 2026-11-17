@@ -20,8 +20,9 @@ from vulnflow.adapters.input.trivy import TrivyAdapter
 from vulnflow.agents.fixer import default_fixer_agent
 from vulnflow.agents.planner import default_planner_agent
 from vulnflow.agents.rootcause import default_rootcause_agent
+from vulnflow.agents.secrets import default_secrets_agent
 from vulnflow.agents.verifier import default_verifier_agent
-from vulnflow.contracts.finding import Finding
+from vulnflow.contracts.finding import Finding, FindingType
 from vulnflow.contracts.policy import PolicyStatus
 from vulnflow.contracts.remediation_plan import (
     RemediationAction,
@@ -145,6 +146,26 @@ def plan_node(state: VulnFlowState) -> VulnFlowState:
             rc_id = group["root_cause_id"]
             f_dicts = group["findings"]
             findings_objs = [Finding.from_dict(f) for f in f_dicts]
+
+            # If findings represent a leaked secret or PII, delegate to SecretsAgent (F23)
+            secret_findings = [f_obj for f_obj in findings_objs if f_obj.type == FindingType.SECRET]
+            if secret_findings:
+                for sf in secret_findings:
+                    plan = default_secrets_agent.plan_secret_remediation(sf, repo_path=state.repo_path)
+                    plans.append(plan)
+                    state.append_audit(
+                        "PLAN_FORMULATED",
+                        "secrets_agent",
+                        {
+                            "plan_id": plan.id,
+                            "root_cause_id": plan.root_cause_id,
+                            "action": "rotate",
+                            "risk_tier": "review",
+                            "requires_approval": True,
+                        },
+                    )
+                continue
+
             clean_rc = rc_id.replace("PKG-", "")
             # Infer ecosystem from package prefix if present (e.g. 'pip:Django' -> 'PyPI')
             pkg_eco = state.ecosystem

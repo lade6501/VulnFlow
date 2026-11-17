@@ -199,6 +199,29 @@ def test_f23_secrets_and_pii_flow() -> None:
     plan_dict_str = str(plan.to_dict())
     assert secret_val not in plan_dict_str
 
+    # 4. End-to-end workflow execution halts at human approval gate
+    with tempfile.TemporaryDirectory() as tmpdir:
+        repo_dir = Path(tmpdir)
+        (repo_dir / "config.js").write_text("const KEY = 'AKIAIOSFODNN7EXAMPLE';", encoding="utf-8")
+        report_f = repo_dir / "gitleaks.json"
+        report_f.write_text(json.dumps([{
+            "RuleID": "aws-access-key",
+            "Description": "AWS Access Key leaked",
+            "File": "config.js",
+            "StartLine": 1,
+            "Secret": "AKIAIOSFODNN7EXAMPLE",
+            "Fingerprint": "abc123sha",
+        }]), encoding="utf-8")
+
+        state = VulnFlowState(repo_path=str(repo_dir), report_path=str(report_f), scanner="gitleaks", mode="pr")
+        result = run_workflow(state)
+
+        assert result.terminal_status == "pending_approval"
+        assert result.exit_code == 10
+        assert len(result.pending_approval_plans) == 1
+        assert result.pending_approval_plans[0].action == RemediationAction.ROTATE
+        assert len(result.pull_requests) == 0
+
 
 def test_f24_and_f25_expiry_predictor_and_renewal() -> None:
     """F24 & F25 acceptance criteria: expiring returns artifacts in warning window and predictor estimates risk window; renewal ticket/PR opened before expiry, idempotent."""
