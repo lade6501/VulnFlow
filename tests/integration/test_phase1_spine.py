@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 from vulnflow.adapters.ecosystem.npm import NPMAdapter
 from vulnflow.adapters.input.sarif import SARIFAdapter
 from vulnflow.adapters.input.trivy import ScannerParseError, TrivyAdapter
-from vulnflow.agents.planner import PlannerAgent
+from vulnflow.agents.planner import PlannerAgent, default_planner_agent
 from vulnflow.contracts.finding import Finding, FindingType, LocationInfo, SeverityLevel
 from vulnflow.contracts.policy import PolicyStatus
 from vulnflow.contracts.remediation_plan import RemediationAction, RiskTier
@@ -30,6 +30,9 @@ from vulnflow.orchestrator.graph import run_workflow
 from vulnflow.policy.engine import PolicyEngine
 from vulnflow.reporting.pr_comment import format_pr_body
 from vulnflow.sandbox.runner import SandboxRunner
+
+# Run integration tests with deterministic planner
+default_planner_agent.enable_llm = False
 
 
 def test_f01_trivy_and_sarif_adapters() -> None:
@@ -143,7 +146,7 @@ def test_f10_and_f11_policy_engine() -> None:
 
 def test_f16_planner_agent() -> None:
     """F16: Test PlannerAgent formulation of remediation plans."""
-    agent = PlannerAgent()
+    agent = PlannerAgent(enable_llm=False)
     finding = Finding(
         id="FND-LODASH",
         type=FindingType.VULN,

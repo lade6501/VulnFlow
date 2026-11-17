@@ -36,6 +36,7 @@ class AdvisoryChunk:
             "package": self.package,
             "ecosystem": self.ecosystem,
             "cve": self.cve,
+            "aliases": self.metadata.get("aliases", []),
             "title": self.title,
             "description": self.text,
             "cvss_score": self.metadata.get("cvss_score", 7.0),

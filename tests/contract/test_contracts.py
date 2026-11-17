@@ -144,6 +144,9 @@ def test_phase_0_gate_stubbed_run() -> None:
     A stubbed run goes from a sample scanner report to a fake PR through the orchestrator,
     using only stub tools.
     """
+    from vulnflow.agents.planner import default_planner_agent
+    default_planner_agent.enable_llm = False
+
     fixture_path = str(Path(__file__).resolve().parent.parent.parent / "data" / "fixtures" / "sample_trivy_report.json")
     repo_path = str(Path(__file__).resolve().parent.parent.parent / "samples" / "npm-simple-bump")
 

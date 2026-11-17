@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -48,9 +49,17 @@ class PlannerAgent:
     and organizational policies into a verified RemediationPlan.
     """
 
-    def __init__(self, client: Optional[LLMClient] = None, enable_llm: bool = True) -> None:
-        self.client = client or create_llm_client(role="planner")
-        self.enable_llm = enable_llm
+    def __init__(self, client: Optional[LLMClient] = None, enable_llm: Optional[bool] = None) -> None:
+        if enable_llm is None:
+            if os.getenv("VULNFLOW_ENABLE_LLM", "").lower() in ("0", "false", "no"):
+                enable_llm = False
+            elif os.getenv("CI") and not os.getenv("NVIDIA_API_KEY") and not os.getenv("OPENAI_API_KEY"):
+                enable_llm = False
+            else:
+                enable_llm = True
+
+        self.enable_llm = bool(enable_llm)
+        self.client = client if client is not None else (create_llm_client(role="planner") if self.enable_llm else None)
         self._circuit_broken = False
 
     def reset_circuit_breaker(self) -> None:
@@ -225,8 +234,8 @@ class PlannerAgent:
             code_tier = RiskTier.REVIEW
         risk_tier = code_tier
 
-        # Only invoke LLM if enabled and circuit breaker is unbroken
-        if self.enable_llm and not self._circuit_broken:
+        # Only invoke LLM if enabled, client exists, and circuit breaker is unbroken
+        if self.enable_llm and self.client and not self._circuit_broken:
             try:
                 provider_name = self.client.get_provider_name() if hasattr(self.client, "get_provider_name") else "llm"
                 model_name = getattr(self.client, "default_model", "default")
