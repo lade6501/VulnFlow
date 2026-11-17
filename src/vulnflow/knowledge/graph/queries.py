@@ -150,3 +150,8 @@ def find_blast_radius(
         "affected_repos": affected_repos,
         "blast_radius_tier": tier,
     }
+
+
+# Convenience aliases for query interfaces
+root_cause = find_root_cause
+blast_radius = find_blast_radius

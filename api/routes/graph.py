@@ -7,13 +7,13 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from vulnflow.knowledge.graph.queries import blast_radius, root_cause
+from vulnflow.knowledge.graph.queries import find_blast_radius, find_root_cause
 
 
 def get_graph_data(package: str = "npm:lodash", repo: str = "workspace") -> Dict[str, Any]:
     """Return dependency graph nodes and edges for root-cause and blast radius visualization."""
-    rc = root_cause(transitive_package=package, repo=repo)
-    br = blast_radius(package=package)
+    rc = find_root_cause(package=package, repo_path=repo)
+    br = find_blast_radius(package=package)
 
     return {
         "package": package,

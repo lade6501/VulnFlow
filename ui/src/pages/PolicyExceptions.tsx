@@ -3,7 +3,7 @@ ui/src/pages/PolicyExceptions.tsx
 Page managing temporary policy exceptions and expiration timelines.
 */
 
-import React, { useState } from 'react';
+import { useState } from 'react';
 
 interface PolicyException {
   ticketId: string;
@@ -35,48 +35,64 @@ export const PolicyExceptions: React.FC = () => {
   ]);
 
   return (
-    <div style={{ padding: '24px', fontFamily: 'sans-serif' }}>
-      <h2>📋 Policy Exceptions & Banned Package Waivers</h2>
-      <p style={{ color: '#666' }}>
-        Track security exception tickets and manage time-bound policy waivers.
-      </p>
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-2xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
+          <span>📋</span> Policy Exceptions & Banned Package Waivers
+        </h2>
+        <p className="text-sm text-slate-500 mt-1">
+          Track security exception tickets and manage time-bound policy waivers issued by security review.
+        </p>
+      </div>
 
-      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '16px' }}>
-        <thead>
-          <tr style={{ backgroundColor: '#f3f4f6', textAlign: 'left' }}>
-            <th style={{ padding: '10px', border: '1px solid #ddd' }}>Ticket ID</th>
-            <th style={{ padding: '10px', border: '1px solid #ddd' }}>Package</th>
-            <th style={{ padding: '10px', border: '1px solid #ddd' }}>Vulnerability</th>
-            <th style={{ padding: '10px', border: '1px solid #ddd' }}>Policy Blocking Reason</th>
-            <th style={{ padding: '10px', border: '1px solid #ddd' }}>Status</th>
-            <th style={{ padding: '10px', border: '1px solid #ddd' }}>Expires At</th>
-          </tr>
-        </thead>
-        <tbody>
-          {exceptions.map((ex) => (
-            <tr key={ex.ticketId}>
-              <td style={{ padding: '10px', border: '1px solid #ddd' }}><code>{ex.ticketId}</code></td>
-              <td style={{ padding: '10px', border: '1px solid #ddd' }}>{ex.package}</td>
-              <td style={{ padding: '10px', border: '1px solid #ddd' }}>{ex.cve}</td>
-              <td style={{ padding: '10px', border: '1px solid #ddd' }}>{ex.reason}</td>
-              <td style={{ padding: '10px', border: '1px solid #ddd' }}>
-                <span
-                  style={{
-                    backgroundColor: ex.status === 'APPROVED' ? '#dcfce7' : '#fef9c3',
-                    color: ex.status === 'APPROVED' ? '#166534' : '#854d0e',
-                    padding: '2px 8px',
-                    borderRadius: '4px',
-                    fontSize: '12px',
-                  }}
-                >
-                  {ex.status}
-                </span>
-              </td>
-              <td style={{ padding: '10px', border: '1px solid #ddd' }}>{ex.expiresAt}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm text-slate-700">
+            <thead className="bg-slate-50 border-b border-slate-200 text-xs uppercase font-semibold text-slate-500">
+              <tr>
+                <th className="px-5 py-3.5">Ticket ID</th>
+                <th className="px-5 py-3.5">Package</th>
+                <th className="px-5 py-3.5">Vulnerability</th>
+                <th className="px-5 py-3.5">Policy Blocking Reason</th>
+                <th className="px-5 py-3.5">Status</th>
+                <th className="px-5 py-3.5">Expires At</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {exceptions.map((ex) => (
+                <tr key={ex.ticketId} className="hover:bg-slate-50/80 transition-colors">
+                  <td className="px-5 py-4 font-mono text-xs font-semibold text-slate-900">
+                    <code>{ex.ticketId}</code>
+                  </td>
+                  <td className="px-5 py-4 font-mono text-xs text-slate-800 font-medium">
+                    {ex.package}
+                  </td>
+                  <td className="px-5 py-4 font-mono text-xs text-rose-700">
+                    {ex.cve}
+                  </td>
+                  <td className="px-5 py-4 text-xs text-slate-600 max-w-sm">
+                    {ex.reason}
+                  </td>
+                  <td className="px-5 py-4">
+                    <span
+                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+                        ex.status === 'APPROVED'
+                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : 'bg-amber-50 text-amber-700 border border-amber-200'
+                      }`}
+                    >
+                      {ex.status}
+                    </span>
+                  </td>
+                  <td className="px-5 py-4 font-mono text-xs text-slate-500">
+                    {ex.expiresAt}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 };
