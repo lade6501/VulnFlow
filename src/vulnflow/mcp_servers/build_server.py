@@ -1,6 +1,6 @@
 """
 src/vulnflow/mcp_servers/build_server.py
-MCP tool server triggering package builds and automated test suites.
+MCP tool server triggering sandboxed package builds and automated test suites.
 """
 
 from __future__ import annotations
@@ -9,9 +9,16 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from vulnflow.mcp_servers.fastmcp import FastMCP
 from vulnflow.sandbox.runner import SandboxRunner, default_sandbox
 
 logger = logging.getLogger("vulnflow.mcp_servers.build")
+
+# Initialize formal FastMCP server instance
+mcp = FastMCP(
+    name="vulnflow-build",
+    description="MCP server executing sandboxed package builds and verification test suites.",
+)
 
 
 class BuildServer:
@@ -19,6 +26,7 @@ class BuildServer:
 
     def __init__(self, sandbox: Optional[SandboxRunner] = None) -> None:
         self.sandbox = sandbox or default_sandbox
+        self.mcp = mcp
 
     def build_test(
         self,
@@ -39,6 +47,13 @@ class BuildServer:
 build_server = BuildServer()
 
 
+@mcp.tool(
+    name="build_test",
+    description="Executes automated package build and test suite inside sandbox, returning verification metrics.",
+)
 def build_test(repo: str, branch: str = "main", ecosystem: str = "npm") -> Dict[str, Any]:
-    """Direct callable wrapper for build_test tool."""
     return build_server.build_test(repo, branch, ecosystem)
+
+
+if __name__ == "__main__":
+    mcp.run()

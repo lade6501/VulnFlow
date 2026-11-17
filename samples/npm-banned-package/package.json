@@ -1,0 +1,11 @@
+{
+  "name": "sample-npm-banned",
+  "version": "1.0.0",
+  "description": "Sample application with banned package left-pad",
+  "dependencies": {
+    "left-pad": "1.3.0"
+  },
+  "scripts": {
+    "test": "node -e \"process.exit(0)\""
+  }
+}

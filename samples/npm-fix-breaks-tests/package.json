@@ -1,0 +1,11 @@
+{
+  "name": "sample-npm-broken-tests",
+  "version": "1.0.0",
+  "description": "Sample application where bumping dependency causes test script to fail",
+  "dependencies": {
+    "lodash": "4.17.15"
+  },
+  "scripts": {
+    "test": "node -e \"process.exit(1)\""
+  }
+}

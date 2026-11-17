@@ -74,30 +74,38 @@ class VulnFlowWorkflow:
                 },
             )
 
-            # 1. Ingest
-            state = self.nodes["ingest"](state)
+            # If resuming a paused state at approval gate, resume directly from approve
+            if state.terminal_status == "pending_approval" and state.plans:
+                logger.info("Resuming paused workflow run %s at approval gate", state.run_id)
+                state.terminal_status = "running"
+            else:
+                # 1. Ingest
+                state = self.nodes["ingest"](state)
 
-            # 2. Dedupe
-            state = self.nodes["dedupe"](state)
+                # 2. Dedupe
+                state = self.nodes["dedupe"](state)
 
-            # 3. Root cause
-            state = self.nodes["rootcause"](state)
+                # 3. Root cause
+                state = self.nodes["rootcause"](state)
 
-            # 4. Policy check
-            state = self.nodes["policy"](state)
-            if route_after_policy(state) == "exception":
-                state = self.nodes["exception"](state)
-                return state
+                # 4. Policy check
+                state = self.nodes["policy"](state)
+                if route_after_policy(state) == "exception":
+                    state = self.nodes["exception"](state)
+                    return state
 
-            # 5. Plan
-            state = self.nodes["plan"](state)
-            if route_after_plan(state) == "verify":  # Report-only mode
-                state = self.nodes["verify"](state)
-                return state
+                # 5. Plan
+                state = self.nodes["plan"](state)
+                if route_after_plan(state) == "verify":  # Report-only mode
+                    state = self.nodes["verify"](state)
+                    return state
 
             # 6. Approve gate
             state = self.nodes["approve"](state)
-            if route_after_approve(state) == "exception":
+            approve_route = route_after_approve(state)
+            if approve_route == "pause":
+                return state
+            elif approve_route == "exception":
                 state = self.nodes["exception"](state)
                 return state
 

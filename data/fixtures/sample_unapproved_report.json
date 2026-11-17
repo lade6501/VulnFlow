@@ -1,0 +1,10 @@
+[
+  {
+    "package": "npm:unapproved-pkg",
+    "version": "1.0.0",
+    "cve": ["CVE-2023-99999"],
+    "severity": "CRITICAL",
+    "file_path": "package.json",
+    "fix_versions": ["1.0.1", "2.0.0"]
+  }
+]

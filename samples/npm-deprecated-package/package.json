@@ -1,0 +1,11 @@
+{
+  "name": "sample-npm-deprecated",
+  "version": "1.0.0",
+  "description": "Sample application with deprecated package moment",
+  "dependencies": {
+    "moment": "2.29.1"
+  },
+  "scripts": {
+    "test": "node -e \"process.exit(0)\""
+  }
+}

@@ -23,6 +23,26 @@ packages:
     ecosystem: npm
     approved_versions: ">=1.7.4"
     status: approved
+  - name: my-frontend-lib
+    ecosystem: npm
+    approved_versions: ">=1.0.0"
+    status: approved
+
+  # --- Python (PyPI) Ecosystem ---
+  - name: urllib3
+    ecosystem: pypi
+    approved_versions: ">=2.0.0"
+    status: approved
+  - name: requests
+    ecosystem: pypi
+    approved_versions: ">=2.32.0"
+    status: approved
+
+  # --- Java (Maven) Ecosystem ---
+  - name: "org.apache.logging.log4j:log4j-core"
+    ecosystem: maven
+    approved_versions: ">=2.17.1"
+    status: approved
 
 rules:
   unknown_package: require_approval

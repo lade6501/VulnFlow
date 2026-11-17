@@ -1,0 +1,10 @@
+[
+  {
+    "package": "npm:moment",
+    "version": "2.29.1",
+    "cve": ["CVE-2022-24785"],
+    "severity": "HIGH",
+    "file_path": "package.json",
+    "fix_versions": ["2.29.2"]
+  }
+]

@@ -36,7 +36,7 @@ class NvidiaProvider(LLMClient):
         default_model: str = "meta/llama-3.1-70b-instruct",
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
-        timeout: float = 60.0,
+        timeout: float = 15.0,
         max_retries: int = 3,
         **kwargs: Any,
     ) -> None:

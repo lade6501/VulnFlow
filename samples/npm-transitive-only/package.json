@@ -1,0 +1,8 @@
+{
+  "name": "sample-npm-transitive",
+  "version": "1.0.0",
+  "description": "Sample application with a vulnerability introduced only via transitive dependency",
+  "dependencies": {
+    "my-frontend-lib": "1.0.0"
+  }
+}

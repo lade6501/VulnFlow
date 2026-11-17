@@ -1,0 +1,11 @@
+{
+  "name": "sample-npm-unapproved",
+  "version": "1.0.0",
+  "description": "Sample application where available fix versions are not pre-approved",
+  "dependencies": {
+    "unapproved-pkg": "1.0.0"
+  },
+  "scripts": {
+    "test": "node -e \"process.exit(0)\""
+  }
+}

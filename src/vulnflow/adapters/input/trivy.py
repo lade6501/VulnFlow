@@ -134,10 +134,18 @@ class TrivyAdapter:
         except ValueError:
             severity = SeverityLevel.MEDIUM
 
+        raw_dep_path = item.get("dependency_path") or item.get("PkgPath") or item.get("path")
+        if isinstance(raw_dep_path, str):
+            dep_path = [p.strip() for p in raw_dep_path.replace(">", "/").split("/") if p.strip()]
+        elif isinstance(raw_dep_path, list):
+            dep_path = [str(p) for p in raw_dep_path]
+        else:
+            dep_path = [pkg_raw]
+
         location = LocationInfo(
             file_path=target_file,
             line=item.get("line"),
-            dependency_path=[pkg_raw],
+            dependency_path=dep_path,
         )
 
         fnd_id = compute_finding_id(

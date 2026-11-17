@@ -88,12 +88,14 @@ class SandboxRunner:
             npm_bin = shutil.which("npm")
             if npm_bin:
                 code, stdout, stderr = self.run_command([npm_bin, "test", "--if-present"], cwd=repo_dir, timeout=timeout)
-                clean = (code == 0)
+                combined = (stdout or "") + (stderr or "")
+                is_no_test_placeholder = "no test specified" in combined.lower()
+                clean = (code == 0) or is_no_test_placeholder
                 return {
                     "status": "success" if clean else "failed",
                     "build_clean": clean,
-                    "tests_total": 1,
-                    "tests_passed": 1 if clean else 0,
+                    "tests_total": 0 if is_no_test_placeholder else 1,
+                    "tests_passed": 0 if is_no_test_placeholder else (1 if clean else 0),
                     "tests_failed": 0 if clean else 1,
                     "duration_seconds": round(time.time() - start_time, 2),
                     "output": stdout or stderr,

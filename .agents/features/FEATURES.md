@@ -46,11 +46,11 @@ Paths are relative to `src/vulnflow/` unless they start with `api/`, `ui/`, `har
 
 | ID | Feature | Phase | Primary paths | Depends on | Acceptance criteria | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| F05 | Root-cause grouping | P2 | `knowledge/graph/queries.py`, `agents/rootcause.py` | F03 | `root_cause` collapses a transitive-only sample to one parent dependency and explains it | todo |
-| F06 | Blast-radius query | P2 | `knowledge/graph/queries.py`, `mcp_servers/knowledge_server.py` | F05 | `blast_radius` returns the services and repos affected by a package change on the seeded graph | todo |
-| F07 | Advisory-grounded impact analysis | P2 | `knowledge/vector/`, `knowledge/sources/`, `agents/planner.py` | F10, F42 | `advisory_search` returns the right advisory and release-note chunks filtered by package; plan rationale cites chunk IDs | todo |
-| F08 | Risk scoring and tiering | P2 | `core/risk.py`, `policies/risk_tiers.yaml` | F10 | Tier is computed by code from policy, bump size, tests and evidence; the model can only make it stricter | todo |
-| F09 | Findings report | P2 | `reporting/markdown.py`, `json_report.py`, `pr_comment.py` | F05 | Markdown and JSON reports group findings by root cause and show policy result and tier | todo |
+| F05 | Root-cause grouping | P2 | `knowledge/graph/queries.py`, `agents/rootcause.py` | F03 | `root_cause` collapses a transitive-only sample to one parent dependency and explains it | done |
+| F06 | Blast-radius query | P2 | `knowledge/graph/queries.py`, `mcp_servers/knowledge_server.py` | F05 | `blast_radius` returns the services and repos affected by a package change on the seeded graph | done |
+| F07 | Advisory-grounded impact analysis | P2 | `knowledge/vector/`, `knowledge/sources/`, `agents/planner.py` | F10, F42 | `advisory_search` returns the right advisory and release-note chunks filtered by package; plan rationale cites chunk IDs | done |
+| F08 | Risk scoring and tiering | P2 | `core/risk.py`, `policies/risk_tiers.yaml` | F10 | Tier is computed by code from policy, bump size, tests and evidence; the model can only make it stricter | done |
+| F09 | Findings report | P2 | `reporting/markdown.py`, `json_report.py`, `pr_comment.py` | F05 | Markdown and JSON reports group findings by root cause and show policy result and tier | done |
 
 ## 3.3 Governance and policy
 
@@ -58,9 +58,9 @@ Paths are relative to `src/vulnflow/` unless they start with `api/`, `ui/`, `har
 | --- | --- | --- | --- | --- | --- | --- |
 | F10 | Approved-package check | P1 | `policy/engine.py`, `mcp_servers/policy_server.py`, `policies/approved_packages.yaml` | F02 | `policy_check` returns approved, deprecated, banned, unknown or license_denied with rule and replacement; deterministic; table-driven tests pass | done |
 | F11 | Fix-candidate filtering | P1 | `policy/engine.py`, `mcp_servers/policy_server.py` | F10 | `policy_candidates` removes every version the policy rejects; the unapproved-fix sample yields no candidates | done |
-| F12 | Replacement proposals | P2 | `policy/engine.py`, `agents/planner.py` | F10 | Deprecated or banned package gets the approved replacement in the plan with tier `review` | todo |
-| F13 | Exception workflow | P2 | `mcp_servers/ticket_server.py`, `orchestrator/nodes.py`, `orchestrator/routing.py` | F11 | When only unapproved fixes exist, a ticket with CVE context is created, no PR is opened, and a rerun creates no duplicate | todo |
-| F14 | Registry availability check | P2 | `mcp_servers/registry_server.py` | F10 | `registry_check` confirms the target version exists in the configured registry before a PR | todo |
+| F12 | Replacement proposals | P2 | `policy/engine.py`, `agents/planner.py` | F10 | Deprecated or banned package gets the approved replacement in the plan with tier `review` | done |
+| F13 | Exception workflow | P2 | `mcp_servers/ticket_server.py`, `orchestrator/nodes.py`, `orchestrator/routing.py` | F11 | When only unapproved fixes exist, a ticket with CVE context is created, no PR is opened, and a rerun creates no duplicate | done |
+| F14 | Registry availability check | P2 | `mcp_servers/registry_server.py` | F10 | `registry_check` confirms the target version exists in the configured registry before a PR | done |
 | F15 | License rules | P3 | `policy/licenses.py`, `policies/licenses.yaml` | F10 | Denied licenses return `license_denied`; table-driven tests cover allowed and denied cases | todo |
 
 ## 3.4 Remediation
@@ -71,9 +71,9 @@ Paths are relative to `src/vulnflow/` unless they start with `api/`, `ui/`, `har
 | F17 | Sandboxed execution | P1 | `sandbox/runner.py`, `mcp_servers/git_server.py` | F16 | Clone, branch and patch run in an ephemeral container with scoped token and no production secrets | done |
 | F18 | Build and test runner | P1 | `sandbox/runner.py`, `mcp_servers/build_server.py`, `adapters/ecosystem/npm.py` | F17 | `build_test` returns build and test results for the patched branch, with timeouts | done |
 | F19 | PR creation | P1 | `mcp_servers/git_server.py`, `reporting/pr_comment.py` | F18 | `pr_create` opens a PR with root cause, evidence, policy status and test results; rerun does not duplicate it | done |
-| F20 | Self-correction loop | P2 | `orchestrator/routing.py`, `agents/fixer.py` | F18 | Test failure retries with error context up to the configured limit, then escalates to `review` | todo |
-| F21 | Human approval gate | P2 | `orchestrator/approval.py`, `mcp_servers/notify_server.py` | F16 | Run pauses for review-tier plans, persists state, and resumes on approve or stops on reject with a stored reason | todo |
-| F22 | Verification | P2 | `agents/verifier.py`, `mcp_servers/scan_server.py` | F19 | `scan_diff` and a policy recheck on the full tree decide resolved or failed in code; a failed verify is never reported as success | todo |
+| F20 | Self-correction loop | P2 | `orchestrator/routing.py`, `agents/fixer.py` | F18 | Test failure retries with error context up to the configured limit, then escalates to `review` | done |
+| F21 | Human approval gate | P2 | `orchestrator/approval.py`, `mcp_servers/notify_server.py` | F16 | Run pauses for review-tier plans, persists state, and resumes on approve or stops on reject with a stored reason | done |
+| F22 | Verification | P2 | `agents/verifier.py`, `mcp_servers/scan_server.py` | F19 | `scan_diff` and a policy recheck on the full tree decide resolved or failed in code; a failed verify is never reported as success | done |
 
 ## 3.5 Breadth findings
 
@@ -139,3 +139,11 @@ Record changes to this file here (date, ID, what changed, who). Adding, removing
 
 | Date | ID | Change | By |
 | --- | --- | --- | --- |
+| 2026-11-17 | F05-F09 | Complete root cause, blast radius, vector advisories, risk tiering, and reports | Agent |
+| 2026-11-17 | F12 | Complete replacement proposals for deprecated and banned packages | Agent |
+| 2026-11-17 | F13 | Complete exception workflow with CVE context and idempotent tickets | Agent |
+| 2026-11-17 | F14 | Complete registry availability checking across npm and PyPI | Agent |
+| 2026-11-17 | F20 | Complete self-correction loop with FixerAgent and test retry escalation | Agent |
+| 2026-11-17 | F21 | Complete persistent human approval gate, pause/resume, and CLI approve command | Agent |
+| 2026-11-17 | F22 | Complete VerifierAgent, rescan diff, policy recheck, and strict verification invariant | Agent |
+| 2026-11-17 | P2-GATE | Phase 2 Gate passed: all policy and vulnerability scenarios run end-to-end | Agent |

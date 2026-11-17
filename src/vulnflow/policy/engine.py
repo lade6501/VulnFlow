@@ -97,7 +97,14 @@ class PolicyEngine:
         # Index packages by (ecosystem, name)
         self._pkg_index: Dict[Tuple[str, str], PackagePolicyEntry] = {}
         for entry in self.policy.packages:
-            key = (entry.ecosystem.lower(), entry.name.lower())
+            eco = entry.ecosystem.lower()
+            if eco in ("pip", "python", "pypi"):
+                eco = "pypi"
+            elif eco in ("npm", "node"):
+                eco = "npm"
+            elif eco in ("maven", "mvn", "java"):
+                eco = "maven"
+            key = (eco, entry.name.lower())
             self._pkg_index[key] = entry
 
     def check(
@@ -114,12 +121,20 @@ class PolicyEngine:
         """
         # Normalize package identifier
         clean_pkg = package.lower()
+        eco_norm = ecosystem.lower()
         if ":" in clean_pkg:
             eco_part, name_part = clean_pkg.split(":", 1)
-            ecosystem = eco_part
+            eco_norm = eco_part.lower()
             clean_pkg = name_part
 
-        key = (ecosystem.lower(), clean_pkg)
+        if eco_norm in ("pip", "python", "pypi"):
+            eco_norm = "pypi"
+        elif eco_norm in ("npm", "node"):
+            eco_norm = "npm"
+        elif eco_norm in ("maven", "mvn", "java"):
+            eco_norm = "maven"
+
+        key = (eco_norm, clean_pkg)
         entry = self._pkg_index.get(key)
 
         if entry:

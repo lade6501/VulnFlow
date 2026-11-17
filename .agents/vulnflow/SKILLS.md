@@ -178,7 +178,7 @@ When you change what a file does, update its header sentence in the same commit.
 
 1. Never send secret or PII values to an LLM, trace, log, UI or test fixture. Only type, location and fingerprint travel.
 2. Never let a model decide an allow or deny policy outcome, the risk tier, or whether a finding is fixed.
-3. Never perform side effects (git, PRs, tickets, registry, builds, scans) except through MCP tools.
+3. Never perform side effects (git, PRs, tickets, registry, builds, scans, notifications) except through formal MCP tool servers (using `FastMCP`). Every tool must have `@mcp.tool()` registration, typed parameter annotations for JSON Schema generation, and standard JSON-RPC stdio entry points.
 4. Never merge, push to a protected branch, or enable auto-merge. PRs only.
 5. Never add a dependency, framework or service not listed in `docs/architecture.md` without an ADR in `docs/adr/`. Prefer what is already used (Python, pydantic, LangGraph, MCP SDK, Chroma, Neo4j, FastAPI, React and Vite, OpenTelemetry with Langfuse, pytest, RAGAS, DeepEval).
 6. Never commit credentials, tokens or real customer data. `.env.example` holds names only.
@@ -227,13 +227,30 @@ Each recipe lists every place that must change. Do all of them in one PR and not
 4. Add unit tests with that fixture and a contract test that output validates as `Finding`.
 5. Update `docs/ci-integration.md` and the F01 status in `features.md`.
 
-### 7.2 Add or change an MCP tool
+### 7.2 Add or change an MCP tool or server
 
-1. Define the typed input and output in `contracts/` if new, then implement in the matching `mcp_servers/<name>_server.py`.
-2. Mark it read-only or write; write tools require a scoped credential and an audit-log entry.
-3. Add or update the stub under `mcp_servers/stubs/`.
-4. Add a contract test for the signature and an integration test.
-5. Update the tool table in `docs/contracts.md` and section 2 of this file (contract change, rule 8).
+All agent side effects and environment interactions (git, PRs, tickets, sandboxed builds, scans, registry checks, notifications) must **only** occur through formal Model Context Protocol (MCP) servers. Never write ad-hoc classes or direct OS/HTTP side effects in agents or orchestrator nodes.
+
+1. **Formal MCP Server Structure**:
+   - Implement servers in `src/vulnflow/mcp_servers/<name>_server.py` using `FastMCP` (`from vulnflow.mcp_servers.fastmcp import FastMCP` or standard MCP SDK).
+   - Instantiate server: `mcp = FastMCP("vulnflow-<name>", description="...")`.
+   - Register every tool with `@mcp.tool(name="<tool_name>", description="...")` with complete type hints and descriptive docstrings.
+   - Support standalone stdio transport execution: include `if __name__ == "__main__": mcp.run()`.
+2. **Typed Contracts & Schemas**:
+   - Define typed input and output in `contracts/` if new; `@mcp.tool()` automatically reflects parameter types to JSON Schema.
+   - Mark tools read-only or write; write tools require an audit-log entry.
+3. **Stubs & Interoperability**:
+   - Add/update matching stubs under `mcp_servers/stubs/stub_server.py` for offline testing.
+   - Expose tools as directly callable module functions for in-process orchestrator execution while maintaining the MCP tool registration.
+4. **Verification**:
+   - Add a contract test for tool signature and schema in `tests/contract/`.
+   - Update the tool table in `docs/contracts.md` and section 2 of this file.
+5. **Leveraging Existing Production MCP Servers**:
+   - Whenever production infrastructure is available, utilize existing open-source MCP servers:
+     - **GitHub MCP Server** (`@modelcontextprotocol/server-github` via npx or `GITHUB_TOKEN`): for opening PRs, managing branches, and creating issues.
+     - **Git MCP Server** (`@modelcontextprotocol/server-git`): for repository staging and branch manipulation.
+     - **Jira / Atlassian MCP Server** (`@modelcontextprotocol/server-jira` / REST): for security exception tickets and tracking.
+   - Use `vulnflow.mcp_servers.external` bridge clients to delegate tool execution to these external servers when credentials (`GITHUB_TOKEN`, `JIRA_URL`, `JIRA_API_TOKEN`) are configured, falling back to local FastMCP servers in offline or test environments.
 
 ### 7.3 Add an agent
 

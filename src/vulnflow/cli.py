@@ -16,8 +16,11 @@ src_dir = str(Path(__file__).resolve().parent.parent)
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
+from vulnflow.agents.planner import default_planner_agent
 from vulnflow.contracts.state import VulnFlowState
 from vulnflow.orchestrator.graph import run_workflow
+from vulnflow.reporting.json_report import write_json_report
+from vulnflow.reporting.markdown import write_markdown_report
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("vulnflow.cli")
@@ -33,9 +36,30 @@ def _print_execution_summary(result: VulnFlowState) -> None:
     print(f"Exit Code:    {result.exit_code}")
     print(f"Findings:     {len(result.findings)} discovered ({len(result.deduped_findings)} deduped)")
     print(f"Root Causes:  {len(result.root_cause_groups)} group(s)")
-    print(f"Plans:        {len(result.plans)} generated ({len(result.approved_plans)} approved)")
+    pending_cnt = len(result.pending_approval_plans) if getattr(result, "pending_approval_plans", None) else len([p for p in result.plans if p.requires_approval and p not in result.approved_plans])
+    print(f"Plans:        {len(result.plans)} generated ({len(result.approved_plans)} approved, {pending_cnt} pending review)")
     print(f"Patches:      {len(result.patches)} applied")
     print(f"Pull Requests:{len(result.pull_requests)} opened")
+
+    # Pending approval warning
+    if result.terminal_status == "pending_approval" or (getattr(result, "pending_approval_plans", None) and not result.approved_plans):
+        pending = result.pending_approval_plans or [p for p in result.plans if p.requires_approval and p not in result.approved_plans]
+        print("\n" + "-" * width)
+        print("⚠️  Human Security Approval Required (Exit Code: 10):")
+        print(f"  • Status:      {len(pending)} plan(s) paused awaiting human authorization.")
+        print(f"  • Reason:      Packages are not on corporate pre-approved list (`UNKNOWN`).")
+        print(f"  • Safeguard:   PR creation withheld to prevent merging unvetted dependencies.")
+        print(f"  • To Approve:  Add to policies/approved_packages.yaml or run with --auto-approve.")
+    # Blocking reason and exception guidance if run halted
+    elif result.terminal_status == "blocked_policy" or result.blocking_reason or result.exception_ticket:
+        t_id = result.exception_ticket.get("ticket_id", "SEC-UNKNOWN") if result.exception_ticket else "SEC-ESCALATED"
+        t_url = result.exception_ticket.get("ticket_url", "#") if result.exception_ticket else "#"
+        print("\n" + "-" * width)
+        print("🛑 Execution Blocked & Exception Escalated:")
+        print(f"  • Reason:      {result.blocking_reason or 'Policy safety gate blocked automated PR opening.'}")
+        print(f"  • Ticket:      {t_id} ({t_url})")
+        print(f"  • Safeguard:   PR creation halted to protect codebase integrity.")
+        print(f"  • Next Action: Review failing tests or request approval via security ticket.")
 
     # 1. Findings Breakdown
     if result.deduped_findings:
@@ -120,15 +144,41 @@ def _print_execution_summary(result: VulnFlowState) -> None:
 
 def cmd_analyze(args: argparse.Namespace) -> int:
     """Execute vulnerability analysis, planning, and optional remediation."""
+    if getattr(args, "no_llm", False):
+        default_planner_agent.enable_llm = False
+    else:
+        default_planner_agent.enable_llm = True
+
     state = VulnFlowState(
         repo_path=args.repo,
         report_path=args.report,
         scanner=args.scanner,
         mode=args.mode,
         ecosystem=args.ecosystem,
+        auto_approve=getattr(args, "auto_approve", False),
     )
     result = run_workflow(state)
     _print_execution_summary(result)
+
+    # Export report to disk
+    out_arg = getattr(args, "output", None)
+    out_format = getattr(args, "format", "markdown")
+
+    if out_arg:
+        out_path = Path(out_arg)
+    else:
+        reports_dir = Path(".vulnflow/reports")
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        ext = "json" if out_format == "json" else "md"
+        out_path = reports_dir / f"report_{result.run_id}.{ext}"
+
+    if str(out_path).endswith(".json") or out_format == "json":
+        write_json_report(result, out_path)
+        print(f"📄 Structured JSON report written to: {out_path}\n")
+    else:
+        write_markdown_report(result, out_path)
+        print(f"📄 Executive Markdown report written to: {out_path}\n")
+
     return result.exit_code
 
 
@@ -152,6 +202,47 @@ def cmd_verify(args: argparse.Namespace) -> int:
     state = VulnFlowState(repo_path=args.repo, mode="report")
     result = run_workflow(state)
     return result.exit_code
+
+
+def cmd_approve(args: argparse.Namespace) -> int:
+    """Record human approval or rejection for a review-tier plan and optionally resume execution."""
+    from vulnflow.orchestrator.approval import global_approval_gate, load_run_state
+
+    plan_id = args.plan_id
+    is_reject = getattr(args, "reject", False)
+    reviewer = getattr(args, "reviewer", "security-lead")
+    reason = getattr(args, "reason", None)
+    repo = getattr(args, "repo", ".")
+
+    # Record decision in persistent approval gate (F21)
+    global_approval_gate.record_decision(
+        plan_id=plan_id,
+        approved=(not is_reject),
+        reviewer=reviewer,
+        reason=reason,
+        repo_path=repo,
+    )
+
+    if is_reject:
+        print(f"\n🛑 Plan {plan_id} REJECTED by {reviewer}. Reason: {reason or 'No reason provided'}\n")
+        return 0
+
+    print(f"\n✅ Plan {plan_id} APPROVED by {reviewer}.")
+
+    # Resume workflow if requested
+    if getattr(args, "resume", False):
+        print(f"🔄 Resuming workflow execution for repository {repo}...")
+        saved_state = load_run_state(repo_path=repo)
+        if saved_state:
+            result = run_workflow(saved_state)
+        else:
+            state = VulnFlowState(repo_path=repo, mode="pr")
+            result = run_workflow(state)
+        _print_execution_summary(result)
+        return result.exit_code
+
+    print(f"Run 'vulnflow analyze --repo {repo}' or 'vulnflow fix --plan-id {plan_id} --repo {repo}' to apply approved plan.\n")
+    return 0
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
@@ -233,6 +324,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_analyze.add_argument("--scanner", default="trivy", help="Security scanner name (trivy, grype, snyk)")
     p_analyze.add_argument("--mode", choices=["report", "pr", "dry-run"], default="pr", help="Execution mode")
     p_analyze.add_argument("--ecosystem", default="npm", help="Primary package ecosystem (npm, maven)")
+    p_analyze.add_argument("--output", "-o", help="File path to save the generated report (e.g., report.md or report.json)")
+    p_analyze.add_argument("--format", choices=["markdown", "json"], default="markdown", help="Report format")
+    p_analyze.add_argument("--no-llm", action="store_true", help="Skip remote LLM calls and use fast deterministic planner")
+    p_analyze.add_argument("--auto-approve", action="store_true", help="Auto-approve review-tier plans without waiting for human sign-off")
     p_analyze.set_defaults(func=cmd_analyze)
 
     # report
@@ -241,6 +336,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_report.add_argument("--report", help="Path to scanner JSON or SARIF report")
     p_report.add_argument("--scanner", default="trivy", help="Security scanner name")
     p_report.add_argument("--ecosystem", default="npm", help="Package ecosystem")
+    p_report.add_argument("--output", "-o", help="File path to save the generated report")
+    p_report.add_argument("--format", choices=["markdown", "json"], default="markdown", help="Report format")
+    p_report.add_argument("--no-llm", action="store_true", help="Skip remote LLM calls and use fast deterministic planner")
     p_report.set_defaults(func=cmd_report)
 
     # fix
@@ -254,6 +352,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_verify.add_argument("--branch", required=True, help="Remediated branch name")
     p_verify.add_argument("--repo", default=".", help="Repository directory path")
     p_verify.set_defaults(func=cmd_verify)
+
+    # approve
+    p_approve = subparsers.add_parser("approve", help="Record human approval or rejection for a review-tier plan")
+    p_approve.add_argument("--plan-id", required=True, help="Remediation plan ID")
+    p_approve.add_argument("--reject", action="store_true", help="Reject the remediation plan instead of approving")
+    p_approve.add_argument("--reviewer", default="security-lead", help="Reviewer identifier or email")
+    p_approve.add_argument("--reason", help="Explanation or justification for decision")
+    p_approve.add_argument("--resume", action="store_true", help="Automatically resume workflow execution on approval")
+    p_approve.add_argument("--repo", default=".", help="Repository directory path")
+    p_approve.set_defaults(func=cmd_approve)
 
     # audit
     p_audit = subparsers.add_parser("audit", help="Inspect chronological audit trail of a run")

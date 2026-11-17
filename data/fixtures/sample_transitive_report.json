@@ -1,0 +1,13 @@
+[
+  {
+    "package": "npm:lodash",
+    "version": "4.17.15",
+    "cve": ["CVE-2020-8203"],
+    "severity": "HIGH",
+    "file_path": "package.json",
+    "dependency_path": ["my-frontend-lib", "lodash"],
+    "fix_versions": ["4.17.21"],
+    "Title": "Prototype Pollution in lodash",
+    "Description": "Prototype pollution vulnerability in transitive dependency lodash before 4.17.21."
+  }
+]

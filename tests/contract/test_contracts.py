@@ -208,6 +208,48 @@ def test_phase_0_gate_stubbed_run() -> None:
     assert "VERIFICATION_COMPLETED" in event_types
 
 
+def test_fastmcp_server_protocol() -> None:
+    """Verify all MCP servers implement formal FastMCP tool registration, schemas, and dispatch."""
+    from vulnflow.mcp_servers.build_server import mcp as build_mcp
+    from vulnflow.mcp_servers.git_server import mcp as git_mcp
+    from vulnflow.mcp_servers.knowledge_server import mcp as knowledge_mcp
+    from vulnflow.mcp_servers.notify_server import mcp as notify_mcp
+    from vulnflow.mcp_servers.policy_server import mcp as policy_mcp
+    from vulnflow.mcp_servers.registry_server import mcp as registry_mcp
+    from vulnflow.mcp_servers.scan_server import mcp as scan_mcp
+    from vulnflow.mcp_servers.ticket_server import mcp as ticket_mcp
+
+    servers = [
+        ("policy", policy_mcp, ["policy_check", "policy_candidates"]),
+        ("git", git_mcp, ["git_clone", "git_branch", "git_patch", "git_commit", "pr_create"]),
+        ("build", build_mcp, ["build_test"]),
+        ("knowledge", knowledge_mcp, ["advisory_search", "graph_query", "root_cause", "blast_radius"]),
+        ("scan", scan_mcp, ["scan_run", "scan_diff"]),
+        ("registry", registry_mcp, ["registry_check"]),
+        ("ticket", ticket_mcp, ["ticket_create"]),
+        ("notify", notify_mcp, ["approval_request", "notify_send"]),
+    ]
+
+    for name, srv, expected_tools in servers:
+        tools = srv.list_tools()
+        tool_names = [t["name"] for t in tools]
+        for exp in expected_tools:
+            assert exp in tool_names, f"Expected tool '{exp}' not registered on {name} MCP server"
+            # Verify inputSchema
+            tool_meta = next(t for t in tools if t["name"] == exp)
+            assert "inputSchema" in tool_meta
+            assert tool_meta["inputSchema"]["type"] == "object"
+            assert "properties" in tool_meta["inputSchema"]
+
+    # Test call_tool on FastMCP server
+    res = policy_mcp.call_tool("policy_check", {"package": "npm:lodash", "version": "4.17.21"})
+    assert res["status"] == "approved"
+
+    ticket_res = ticket_mcp.call_tool("ticket_create", {"ticket_type": "policy_exception", "context": {"target_package": "Django"}})
+    assert ticket_res["status"] == "created"
+    assert "ticket_id" in ticket_res
+
+
 if __name__ == "__main__":
     print("Running test_finding_contract_serialization...")
     test_finding_contract_serialization()
@@ -217,6 +259,8 @@ if __name__ == "__main__":
     test_policy_contract()
     print("Running test_stub_mcp_servers...")
     test_stub_mcp_servers()
+    print("Running test_fastmcp_server_protocol...")
+    test_fastmcp_server_protocol()
     print("Running test_phase_0_gate_stubbed_run...")
     test_phase_0_gate_stubbed_run()
     print("\nALL CONTRACT & PHASE 0 GATE TESTS PASSED!")

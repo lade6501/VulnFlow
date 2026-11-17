@@ -1,0 +1,60 @@
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "<YOUR_GITHUB_PAT>"
+      }
+    },
+    "git": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-git", "/workspace"]
+    },
+    "vulnflow-policy": {
+      "command": "python3",
+      "args": ["-m", "vulnflow.mcp_servers.policy_server"],
+      "env": {
+        "PYTHONPATH": "src"
+      }
+    },
+    "vulnflow-git": {
+      "command": "python3",
+      "args": ["-m", "vulnflow.mcp_servers.git_server"],
+      "env": {
+        "PYTHONPATH": "src"
+      }
+    },
+    "vulnflow-knowledge": {
+      "command": "python3",
+      "args": ["-m", "vulnflow.mcp_servers.knowledge_server"],
+      "env": {
+        "PYTHONPATH": "src"
+      }
+    },
+    "vulnflow-build": {
+      "command": "python3",
+      "args": ["-m", "vulnflow.mcp_servers.build_server"],
+      "env": {
+        "PYTHONPATH": "src"
+      }
+    },
+    "vulnflow-scan": {
+      "command": "python3",
+      "args": ["-m", "vulnflow.mcp_servers.scan_server"],
+      "env": {
+        "PYTHONPATH": "src"
+      }
+    },
+    "vulnflow-ticket": {
+      "command": "python3",
+      "args": ["-m", "vulnflow.mcp_servers.ticket_server"],
+      "env": {
+        "PYTHONPATH": "src",
+        "JIRA_URL": "https://company.atlassian.net",
+        "JIRA_USER_EMAIL": "sec-ops@company.com",
+        "JIRA_API_TOKEN": "<YOUR_JIRA_TOKEN>"
+      }
+    }
+  }
+}

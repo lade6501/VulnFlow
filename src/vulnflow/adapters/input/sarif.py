@@ -120,6 +120,14 @@ class SARIFAdapter:
                     file_path=file_path,
                 )
 
+                raw_dep_path = props.get("dependency_path") or props.get("path")
+                if isinstance(raw_dep_path, str):
+                    dep_path = [p.strip() for p in raw_dep_path.replace(">", "/").split("/") if p.strip()]
+                elif isinstance(raw_dep_path, list):
+                    dep_path = [str(p) for p in raw_dep_path]
+                else:
+                    dep_path = [pkg_raw]
+
                 finding = Finding(
                     id=fnd_id,
                     type=FindingType.VULN,
@@ -129,7 +137,7 @@ class SARIFAdapter:
                     version=version,
                     cve=cve_list,
                     severity=severity,
-                    location=LocationInfo(file_path=file_path, line=start_line, dependency_path=[pkg_raw]),
+                    location=LocationInfo(file_path=file_path, line=start_line, dependency_path=dep_path),
                     fix_versions=fix_list,
                     raw_ref=f"{raw_ref}#{run_idx}/{res_idx}",
                     metadata={"message": msg, "rule_name": rule_info.get("name", "")},
