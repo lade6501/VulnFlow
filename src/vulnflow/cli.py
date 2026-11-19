@@ -133,8 +133,9 @@ def _print_execution_summary(result: VulnFlowState) -> None:
         if trace_url:
             print(f"  • {console.gray('Trace Deep-Link:')}   {console.blue(console.underline(trace_url))}")
     else:
+        hint = console.dim("export LANGSMITH_API_KEY='<your-api-key>' to stream traces live")
         print(f"  • {console.gray('LangSmith Engine:')}  {console.dim('○ INACTIVE (Local audit logging active)')}")
-        print(f"  • {console.gray('Enable Tracing:')}    {console.dim('export LANGSMITH_API_KEY=\"<your-api-key>\" to stream traces live')}")
+        print(f"  • {console.gray('Enable Tracing:')}    {hint}")
 
     if result.audit_events:
         audit_file = f".vulnflow/audit/audit_{result.run_id}.jsonl"
