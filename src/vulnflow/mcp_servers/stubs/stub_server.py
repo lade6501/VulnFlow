@@ -191,6 +191,16 @@ class StubMCPServer:
         self._log_call("git_branch", branch_name=branch_name, repo_dir=repo_dir)
         return {"status": "created", "branch": branch_name}
 
+    def git_has_branch(self, branch_name: str, repo_dir: str) -> bool:
+        self._log_call("git_has_branch", branch_name=branch_name, repo_dir=repo_dir)
+        return False
+
+    def git_cleanup_branch(
+        self, branch_name: str, repo_dir: str, force: bool = True
+    ) -> Dict[str, Any]:
+        self._log_call("git_cleanup_branch", branch_name=branch_name, repo_dir=repo_dir)
+        return {"status": "deleted", "branch": branch_name}
+
     def git_patch(self, file_path: str, diff: str, repo_dir: str) -> Dict[str, Any]:
         self._log_call("git_patch", file_path=file_path, diff=diff, repo_dir=repo_dir)
         return {"status": "applied", "file": file_path, "hunks": 1}

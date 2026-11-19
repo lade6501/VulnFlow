@@ -92,6 +92,48 @@ export async function fetchRuns(limit: number = 50): Promise<RunSummary[]> {
   ];
 }
 
+export async function fetchRunReport(runId: string): Promise<string> {
+  try {
+    const res = await fetch(`${API_BASE}/api/runs/${encodeURIComponent(runId)}/report`);
+    if (res.ok) {
+      const data = await res.json();
+      return data.report || '';
+    }
+  } catch (err) {
+    console.warn(`Failed to fetch report for run ${runId}`, err);
+  }
+  return '';
+}
+
+export interface PendingApprovalItem {
+  id: string;
+  repo: string;
+  targetPackage: string;
+  currentVersion: string;
+  proposedVersion: string;
+  action: string;
+  riskTier: string;
+  reason: string;
+  rationale: string;
+  diff: string;
+}
+
+export async function fetchPendingApprovals(repo?: string): Promise<PendingApprovalItem[]> {
+  try {
+    const url = repo ? `${API_BASE}/api/approvals?repo=${encodeURIComponent(repo)}` : `${API_BASE}/api/approvals`;
+    const res = await fetch(url);
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.plans) && data.plans.length > 0) {
+        return data.plans;
+      }
+    }
+  } catch (err) {
+    console.warn('API call failed for approvals, falling back', err);
+  }
+  return [];
+}
+
 export async function submitPlanApproval(
   planId: string,
   approved: boolean,

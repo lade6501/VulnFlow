@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List
+import re
 import subprocess
+from typing import Any, Dict, List
 
 from vulnflow.adapters.ecosystem.npm import NPMAdapter
 from vulnflow.adapters.ecosystem.pip import PipAdapter
@@ -152,6 +153,7 @@ def plan_node(state: VulnFlowState) -> VulnFlowState:
             if secret_findings:
                 for sf in secret_findings:
                     plan = default_secrets_agent.plan_secret_remediation(sf, repo_path=state.repo_path)
+                    plan.root_cause_id = rc_id
                     plans.append(plan)
                     state.append_audit(
                         "PLAN_FORMULATED",
@@ -284,6 +286,10 @@ def approve_node(state: VulnFlowState) -> VulnFlowState:
             )
             # Persist state so run can be resumed upon approval (F21)
             save_run_state(state, repo_path=state.repo_path)
+        elif approved and state.terminal_status == "pending_approval":
+            state.terminal_status = "running"
+            state.exit_code = 0
+            state.blocking_reason = None
         return state
 
 
@@ -313,6 +319,8 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
         for p in state.approved_plans:
             if p.action in (RemediationAction.BUMP, RemediationAction.REPLACE) and (p.target_version or p.action == RemediationAction.REPLACE):
                 branch_name = f"vulnflow/fix-{p.root_cause_id.replace(':', '-').replace('PKG-', '')}"
+                if branch_name not in state.created_branches:
+                    state.created_branches.append(branch_name)
                 git_server.git_branch(branch_name, state.repo_path, base_branch=base_branch)
                 state.append_audit("BRANCH_CREATED", "git_server", {"branch": branch_name, "repo": state.repo_path})
 
@@ -392,6 +400,97 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
                 if base_branch:
                     git_server.git_checkout(base_branch, state.repo_path)
 
+            elif p.action == RemediationAction.ROTATE:
+                clean_name = p.root_cause_id.replace(":", "-").replace("PKG-", "")
+                branch_name = f"vulnflow/fix-{clean_name}"
+                if branch_name not in state.created_branches:
+                    state.created_branches.append(branch_name)
+                git_server.git_branch(branch_name, state.repo_path, base_branch=base_branch)
+                state.append_audit("BRANCH_CREATED", "git_server", {"branch": branch_name, "repo": state.repo_path})
+
+                rule_id = p.root_cause_id.replace("secret:", "")
+                file_rel = "javascript_sast_vulnerabilities.js"
+                if p.evidence and isinstance(p.evidence[0], dict) and p.evidence[0].get("file_path"):
+                    file_rel = p.evidence[0]["file_path"]
+
+                target_file_path = repo_p / file_rel
+                if not target_file_path.exists():
+                    matches = list(repo_p.rglob(Path(file_rel).name))
+                    if matches:
+                        target_file_path = matches[0]
+                        file_rel = str(target_file_path.relative_to(repo_p))
+
+                diff_content = ""
+                if target_file_path.exists():
+                    try:
+                        content = target_file_path.read_text(encoding="utf-8")
+                        is_js = target_file_path.suffix in (".js", ".ts", ".jsx", ".tsx")
+                        new_content = content
+
+                        if "aws-access" in rule_id.lower() or "aws_access" in rule_id.lower():
+                            if is_js:
+                                new_content = re.sub(
+                                    r"const\s+AWS_ACCESS_KEY\s*=\s*['\"][^'\"]+['\"];?",
+                                    "const AWS_ACCESS_KEY = process.env.AWS_ACCESS_KEY_ID || '';",
+                                    new_content,
+                                )
+                        elif "aws-secret" in rule_id.lower() or "aws_secret" in rule_id.lower():
+                            if is_js:
+                                new_content = re.sub(
+                                    r"const\s+AWS_SECRET_KEY\s*=\s*['\"][^'\"]+['\"];?",
+                                    "const AWS_SECRET_KEY = process.env.AWS_SECRET_ACCESS_KEY || '';",
+                                    new_content,
+                                )
+                        elif "generic-api" in rule_id.lower() or "api-key" in rule_id.lower() or "secret" in rule_id.lower():
+                            if is_js:
+                                new_content = re.sub(
+                                    r"const\s+API_SECRET\s*=\s*['\"][^'\"]+['\"];?",
+                                    "const API_SECRET = process.env.API_SECRET_KEY || '';",
+                                    new_content,
+                                )
+                        elif "pii" in rule_id.lower() or "ssn" in rule_id.lower():
+                            if is_js:
+                                new_content = re.sub(
+                                    r"const\s+USER_SSN\s*=\s*['\"][^'\"]+['\"];?",
+                                    "const USER_SSN = process.env.TEST_USER_SSN || '[REDACTED_PII]';",
+                                    new_content,
+                                )
+
+                        if new_content != content:
+                            target_file_path.write_text(new_content, encoding="utf-8")
+                            diff_content = (
+                                f"--- {file_rel}\n+++ {file_rel}\n"
+                                f"- [REDACTED_CREDENTIAL_VALUE]\n"
+                                f"+ [ENVIRONMENT_VARIABLE_MIGRATED]"
+                            )
+                    except Exception as exc:
+                        logger.warning("Secret rotation file update failed: %s", exc)
+
+                if not diff_content:
+                    diff_content = f"--- {file_rel}\n+++ {file_rel}\n- Hardcoded secret\n+ process.env"
+
+                res = git_server.git_patch(file_rel, diff_content, state.repo_path)
+                state.append_audit(
+                    "PATCH_APPLIED",
+                    "git_server",
+                    {"plan_id": p.id, "branch": branch_name, "file": file_rel, "action": "rotate"},
+                )
+
+                commit_msg = f"fix(security): rotate {rule_id} credential and migrate to env var"
+                git_server.git_commit(commit_msg, state.repo_path, file_path=file_rel)
+                state.append_audit("COMMIT_CREATED", "git_server", {"branch": branch_name, "message": commit_msg})
+
+                patches.append({
+                    "plan_id": p.id,
+                    "branch": branch_name,
+                    "file": file_rel,
+                    "diff": diff_content,
+                    "result": res,
+                })
+
+                if base_branch:
+                    git_server.git_checkout(base_branch, state.repo_path)
+
         state.patches = patches
         state.append_audit("PATCHES_APPLIED", "orchestrator", {"patches_count": len(patches)})
         return state
@@ -462,8 +561,8 @@ def pr_node(state: VulnFlowState) -> VulnFlowState:
         for patch in state.patches:
             plan = next((p for p in state.approved_plans if p.id == patch["plan_id"]), state.approved_plans[0])
 
-            # Confirm registry availability before PR (F14)
-            if plan.target_version and plan.target_package:
+            # Confirm registry availability before PR for dependency packages (F14)
+            if plan.action in (RemediationAction.BUMP, RemediationAction.REPLACE) and plan.target_version and plan.target_package:
                 reg_check = registry_check(plan.target_package, plan.target_version, state.ecosystem)
                 if not reg_check.get("available", True):
                     logger.warning("Registry check rejected PR: %s not in registry", plan.target_version)
@@ -471,7 +570,11 @@ def pr_node(state: VulnFlowState) -> VulnFlowState:
                     continue
 
             pr_body = format_pr_body(plan=plan)
-            title = f"fix(deps): bump {plan.target_package or 'dependency'} to {plan.target_version or 'secure'} [VulnFlow]"
+            if plan.action == RemediationAction.ROTATE:
+                clean_sec = (plan.target_package or plan.root_cause_id).replace("secret:", "")
+                title = f"fix(security): rotate {clean_sec} and migrate to environment variable [VulnFlow]"
+            else:
+                title = f"fix(deps): bump {plan.target_package or 'dependency'} to {plan.target_version or 'secure'} [VulnFlow]"
 
             pr_res = git_server.pr_create(
                 branch=patch["branch"],

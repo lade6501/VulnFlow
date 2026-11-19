@@ -36,22 +36,25 @@ def generate_markdown_report(state: VulnFlowState) -> str:
             f"> [!WARNING]",
             f"> ### ⚠️ Human Security Approval Required (Exit Code: 10)",
             f"> **Status**: {len(pending_plans)} remediation plan(s) require human authorization before PR creation.  ",
-            f"> **Safeguard Enforcement**: Target packages are not on the corporate pre-approved list (`UNKNOWN` policy status). Automated pull request opening is withheld until authorized.  ",
+            f"> **Safeguard Enforcement**: Pull request opening is withheld until authorized by security.  ",
             f"> ",
-            f"> **Packages Awaiting Authorization**:",
+            f"> **Plans Awaiting Security Authorization**:",
         ])
         for p in pending_plans[:6]:
             pol_s = p.policy_result.status.upper() if p.policy_result else "UNKNOWN"
-            reason_s = p.policy_result.reason if p.policy_result else "Package not listed on pre-approved whitelist"
-            lines.append(f"> - **`{p.target_package}`** ➔ Proposing `{p.target_version or 'N/A'}` (Policy: `{pol_s}`, Risk Tier: `{p.risk_tier.value.upper()}`)")
-            lines.append(f">   *Details*: {reason_s}")
+            reason_s = p.policy_result.reason if p.policy_result else "Review-tier remediation requiring security authorization."
+            target_str = p.target_package or p.root_cause_id
+            lines.append(f"> - **Plan ID**: `{p.id}` (`{target_str}`)")
+            lines.append(f">   • **Proposed Action**: `{p.action.value.upper()}` ➔ `{p.target_version or 'N/A'}` (Risk Tier: `{p.risk_tier.value.upper()}`)")
+            lines.append(f">   • **Reason**: {reason_s}")
+            lines.append(f">   • **To Approve & Resume**: `python3 src/vulnflow/cli.py approve --plan-id {p.id} --reviewer \"<your-email>\" --resume --repo {state.repo_path}`")
+            lines.append(f"> ")
         if len(pending_plans) > 6:
-            lines.append(f"> - *... and {len(pending_plans) - 6} additional package(s)*")
+            lines.append(f"> - *... and {len(pending_plans) - 6} additional plan(s)*")
         lines.extend([
-            f"> ",
             f"> **How to Authorize**:",
-            f"> 1. **Whitelist in Policy**: Add package and allowed version range to `policies/approved_packages.yaml`.",
-            f"> 2. **Security Sign-Off**: Security team lead authorization required for major version jumps.",
+            f"> 1. **Via CLI**: Run the approval commands above with `--resume` to trigger PR creation.",
+            f"> 2. **Via Web Dashboard**: Open the Plan Approvals UI and click **Approve**.",
             f"> 3. **Non-Interactive CI**: Re-run with `--auto-approve` to bypass the human gate in trusted CI.",
             f"",
         ])
@@ -85,7 +88,7 @@ def generate_markdown_report(state: VulnFlowState) -> str:
         f"| **Raw Scanner Findings** | {len(state.findings)} |",
         f"| **Unique Deduplicated Findings** | {len(state.deduped_findings)} |",
         f"| **Root Cause Dependency Groups** | {len(state.root_cause_groups)} |",
-        f"| **Remediation Plans Generated** | {len(state.plans)} ({len(state.approved_plans)} auto-approved, {pending_count} pending review) |",
+        f"| **Remediation Plans Generated** | {len(state.plans)} ({len(state.approved_plans)} approved, {pending_count} pending review) |",
         f"| **Patches Applied** | {len(state.patches)} |",
         f"| **Pull Requests Opened** | {len(state.pull_requests)} |",
         f"",
@@ -107,7 +110,10 @@ def generate_markdown_report(state: VulnFlowState) -> str:
             explanation = grp.get("explanation", "Root cause identified through dependency graph.")
 
             # Match associated plan
-            matched_plan = next((p for p in state.plans if p.root_cause_id == rc_id), None)
+            matched_plan = next(
+                (p for p in state.plans if p.root_cause_id == rc_id or rc_id in p.root_cause_id or p.root_cause_id in rc_id),
+                None,
+            )
             tier_str = matched_plan.risk_tier.value.upper() if matched_plan else "N/A"
             action_str = matched_plan.action.value.upper() if matched_plan else "N/A"
             target_v = matched_plan.target_version or "N/A" if matched_plan else "N/A"
@@ -116,16 +122,22 @@ def generate_markdown_report(state: VulnFlowState) -> str:
             rationale_text = matched_plan.rationale if matched_plan and matched_plan.rationale else "No specific remediation plan generated."
             approval_note = "Requires Human Authorization" if (matched_plan and matched_plan.requires_approval) else "Automated Bump Eligible"
 
+            plan_id_str = matched_plan.id if matched_plan else "N/A"
             lines.extend([
                 f"### Root Cause #{idx}: `{rc_pkg}`",
                 f"",
+                f"- **Remediation Plan ID**: `{plan_id_str}`",
                 f"- **Origin**: {origin_type}",
                 f"- **Proposed Action**: `{action_str}` ➔ Target Version: `{target_v}`",
                 f"- **Risk Tier**: `{tier_str}` ({approval_note})",
                 f"- **Policy Evaluation**: `{pol_status}`",
                 f"- **Root Cause Analysis**: {explanation}",
+            ])
+            if matched_plan and matched_plan.requires_approval:
+                lines.append(f"- **Approval CLI Command**: `python3 src/vulnflow/cli.py approve --plan-id {matched_plan.id} --reviewer \"<your-email>\" --resume --repo {state.repo_path}`")
+            lines.extend([
                 f"",
-                f"#### 🧠 AI Remediation Proposal & Guidance:",
+                f"#### 🧠 AI Remediation Proposal & Guidance (Plan ID: `{plan_id_str}`):",
                 f"",
             ])
             for rat_line in rationale_text.split("\n"):

@@ -22,7 +22,10 @@ def generate_json_report(state: VulnFlowState) -> Dict[str, Any]:
 
     for grp in state.root_cause_groups:
         rc_id = grp.get("root_cause_id", "")
-        matched_plan = next((p for p in state.plans if p.root_cause_id == rc_id), None)
+        matched_plan = next(
+            (p for p in state.plans if p.root_cause_id == rc_id or rc_id in p.root_cause_id or p.root_cause_id in rc_id),
+            None,
+        )
 
         groups_payload.append({
             "root_cause_id": rc_id,

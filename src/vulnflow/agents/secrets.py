@@ -33,7 +33,12 @@ class SecretsAgent:
         """
         rule_id = finding.metadata.get("rule_id", "generic-secret")
         file_path = finding.location.file_path if finding.location else "unknown"
-        fingerprint = finding.metadata.get("fingerprint", "N/A")
+        raw_fp = str(finding.metadata.get("fingerprint", "N/A"))
+        # Never leak raw credential in fingerprint; redact and hash
+        masked_fp = redact_secrets(raw_fp)
+        if masked_fp == raw_fp and len(raw_fp) > 8 and raw_fp != "N/A":
+            import hashlib
+            masked_fp = f"SHA256:{hashlib.sha256(raw_fp.encode('utf-8')).hexdigest()[:12]}"
 
         # Step-by-step security rotation checklist
         checklist = [
@@ -53,12 +58,13 @@ class SecretsAgent:
 
         rationale = (
             f"Exposed Credential Incident ({rule_id}) detected in {file_path}.\n"
-            f"• Fingerprint: {fingerprint}\n"
+            f"• Fingerprint: {masked_fp}\n"
             f"• Action: ROTATE and remove plaintext credential from codebase.\n"
             f"• Safeguard: Secret values are permanently redacted at ingestion.\n"
             f"• Governance: Secret remediations are strictly classified as REVIEW tier and require human verification.\n\n"
             f"Rotation Checklist:\n" + "\n".join(checklist)
         )
+        rationale = redact_secrets(rationale)
 
         plan = RemediationPlan(
             id=f"PLAN-SEC-{finding.id[:8]}",
@@ -73,12 +79,14 @@ class SecretsAgent:
             evidence=[{
                 "rule_id": rule_id,
                 "file_path": file_path,
-                "fingerprint": fingerprint,
+                "fingerprint": masked_fp,
                 "checklist": checklist,
                 "diff": diff_snippet,
             }],
         )
         return plan
+
+    formulate_rotation_plan = plan_secret_remediation
 
 
 default_secrets_agent = SecretsAgent()

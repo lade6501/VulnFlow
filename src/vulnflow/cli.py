@@ -21,6 +21,7 @@ from vulnflow.contracts.state import VulnFlowState
 from vulnflow.orchestrator.graph import run_workflow
 from vulnflow.reporting.json_report import write_json_report
 from vulnflow.reporting.markdown import write_markdown_report
+from vulnflow.store.run_store import default_run_store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("vulnflow.cli")
@@ -47,9 +48,13 @@ def _print_execution_summary(result: VulnFlowState) -> None:
         print("\n" + "-" * width)
         print("⚠️  Human Security Approval Required (Exit Code: 10):")
         print(f"  • Status:      {len(pending)} plan(s) paused awaiting human authorization.")
-        print(f"  • Reason:      Packages are not on corporate pre-approved list (`UNKNOWN`).")
-        print(f"  • Safeguard:   PR creation withheld to prevent merging unvetted dependencies.")
-        print(f"  • To Approve:  Add to policies/approved_packages.yaml or run with --auto-approve.")
+        print(f"  • Reason:      Review-tier remediations (secrets, PII, or unvetted dependencies).")
+        print(f"  • Safeguard:   PR creation withheld to prevent merging unvetted changes.")
+        print("\n  👉 Next Steps to Approve & Resume:")
+        for idx, p in enumerate(pending, 1):
+            target = p.target_package or p.root_cause_id
+            print(f"    [{idx}] Plan ID: {p.id} ({target})")
+            print(f"        Command: python3 src/vulnflow/cli.py approve --plan-id {p.id} --reviewer \"<your-email>\" --resume --repo {result.repo_path}")
     # Blocking reason and exception guidance if run halted
     elif result.terminal_status == "blocked_policy" or result.blocking_reason or result.exception_ticket:
         t_id = result.exception_ticket.get("ticket_id", "SEC-UNKNOWN") if result.exception_ticket else "SEC-ESCALATED"
@@ -80,6 +85,7 @@ def _print_execution_summary(result: VulnFlowState) -> None:
             tier = plan.risk_tier.value.upper() if hasattr(plan.risk_tier, "value") else str(plan.risk_tier).upper()
             pol = plan.policy_result.status.upper() if plan.policy_result else "APPROVED"
             print(f"  Plan #{idx}: [{act}] {plan.target_package or plan.root_cause_id}")
+            print(f"    • Plan ID:        {plan.id}")
             print(f"    • Target Version: {plan.target_version or 'N/A'}")
             print(f"    • Risk Tier:      {tier} (Requires Approval: {plan.requires_approval})")
             print(f"    • Policy Check:   {pol}")
@@ -158,6 +164,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         auto_approve=getattr(args, "auto_approve", False),
     )
     result = run_workflow(state)
+    default_run_store.save_run(result)
     _print_execution_summary(result)
 
     # Export report to disk
@@ -193,6 +200,7 @@ def cmd_fix(args: argparse.Namespace) -> int:
     logger.info("Executing fix for plan %s on repository %s", args.plan_id, args.repo)
     state = VulnFlowState(repo_path=args.repo, mode="pr")
     result = run_workflow(state)
+    default_run_store.save_run(result)
     return result.exit_code
 
 
@@ -238,6 +246,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
         else:
             state = VulnFlowState(repo_path=repo, mode="pr")
             result = run_workflow(state)
+        default_run_store.save_run(result)
         _print_execution_summary(result)
         return result.exit_code
 

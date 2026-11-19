@@ -3,45 +3,79 @@ ui/src/App.tsx
 Root application component rendering navigation sidebar, control-plane header, and active views.
 */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Runs from './pages/Runs';
 import PlanApproval from './pages/PlanApproval';
 import GraphExplorer from './pages/GraphExplorer';
 import PolicyExceptions from './pages/PolicyExceptions';
 import Expiry from './pages/Expiry';
 import Metrics from './pages/Metrics';
+import {
+  IconShield,
+  IconScale,
+  IconNetwork,
+  IconFileText,
+  IconClock,
+  IconBarChart,
+  IconShieldCheck,
+  IconAlertTriangle,
+  IconRefresh,
+} from './components/Icons';
+import { fetchPendingApprovals } from './api/client';
 
 type TabType = 'runs' | 'approval' | 'graph' | 'exceptions' | 'expiry' | 'metrics';
 
-interface NavItem {
+interface NavConfig {
   id: TabType;
   label: string;
-  icon: string;
-  badge?: string;
+  icon: React.ComponentType<{ className?: string }>;
 }
 
-const NAV_ITEMS: NavItem[] = [
-  { id: 'runs', label: 'Remediation Runs', icon: '🛡️' },
-  { id: 'approval', label: 'Plan & Approvals', icon: '⚖️', badge: '1' },
-  { id: 'graph', label: 'Graph & Blast Radius', icon: '🕸️' },
-  { id: 'exceptions', label: 'Policy Exceptions', icon: '📋' },
-  { id: 'expiry', label: 'Expiry & Tokens', icon: '⏳' },
-  { id: 'metrics', label: 'Metrics & KPIs', icon: '📊' },
+const NAV_CONFIGS: NavConfig[] = [
+  { id: 'runs', label: 'Remediation Runs', icon: IconShield },
+  { id: 'approval', label: 'Plan & Approvals', icon: IconScale },
+  { id: 'graph', label: 'Graph & Blast Radius', icon: IconNetwork },
+  { id: 'exceptions', label: 'Policy Exceptions', icon: IconFileText },
+  { id: 'expiry', label: 'Expiry & Tokens', icon: IconClock },
+  { id: 'metrics', label: 'Metrics & KPIs', icon: IconBarChart },
 ];
 
 export function App() {
   const [activeTab, setActiveTab] = useState<TabType>('runs');
+  const [pendingApprovalsCount, setPendingApprovalsCount] = useState<number>(0);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+
+  const loadApprovalStatus = useCallback(async () => {
+    try {
+      const items = await fetchPendingApprovals();
+      setPendingApprovalsCount(Array.isArray(items) ? items.length : 0);
+    } catch {
+      setPendingApprovalsCount(0);
+    }
+  }, []);
 
   useEffect(() => {
     const hash = window.location.hash.replace('#/', '').replace('#', '') as TabType;
-    if (NAV_ITEMS.some((item) => item.id === hash)) {
+    if (NAV_CONFIGS.some((item) => item.id === hash)) {
       setActiveTab(hash);
     }
-  }, []);
+    loadApprovalStatus();
+
+    // Poll every 12 seconds for fresh approval gate changes
+    const interval = setInterval(loadApprovalStatus, 12000);
+    return () => clearInterval(interval);
+  }, [loadApprovalStatus]);
+
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    await loadApprovalStatus();
+    setTimeout(() => setIsRefreshing(false), 600);
+  };
 
   const handleTabChange = (tab: TabType) => {
     setActiveTab(tab);
     window.location.hash = `#/${tab}`;
+    loadApprovalStatus();
   };
 
   const renderActiveView = () => {
@@ -63,40 +97,52 @@ export function App() {
     }
   };
 
+  const activeNav = NAV_CONFIGS.find((n) => n.id === activeTab);
+
   return (
-    <div className="flex min-h-screen bg-slate-100 text-slate-900 font-sans antialiased">
+    <div className="flex min-h-screen bg-slate-50 text-slate-900 font-sans antialiased">
       {/* Sidebar Navigation */}
-      <aside className="w-64 bg-slate-950 text-slate-100 flex flex-col border-r border-slate-800 shadow-xl shrink-0">
-        <div className="p-6 border-b border-slate-800/80">
+      <aside className="w-64 bg-slate-950 text-slate-100 flex flex-col border-r border-slate-800 shadow-xl shrink-0 select-none">
+        <div className="p-5 border-b border-slate-800/80">
           <div className="flex items-center gap-3">
-            <span className="text-3xl">🛡️</span>
+            <div className="w-9 h-9 rounded-lg bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400">
+              <IconShieldCheck className="w-5 h-5" />
+            </div>
             <div>
-              <h1 className="text-base font-bold tracking-tight text-sky-400">VulnFlow AI</h1>
-              <p className="text-xs text-slate-400">Autonomous Remediation</p>
+              <div className="flex items-center gap-1.5">
+                <h1 className="text-sm font-bold tracking-tight text-white">VulnFlow AI</h1>
+                <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.2 rounded font-semibold bg-sky-500/20 text-sky-300 border border-sky-400/30">
+                  Control
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">Autonomous Security Fabric</p>
             </div>
           </div>
         </div>
 
         <nav className="p-3 flex-1 flex flex-col gap-1">
-          {NAV_ITEMS.map((item) => {
+          {NAV_CONFIGS.map((item) => {
             const isActive = activeTab === item.id;
+            const Icon = item.icon;
+            const showBadge = item.id === 'approval' && pendingApprovalsCount > 0;
+
             return (
               <button
                 key={item.id}
                 onClick={() => handleTabChange(item.id)}
-                className={`flex items-center justify-between px-3.5 py-2.5 rounded-lg text-sm font-medium transition-all text-left ${
+                className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-all text-left cursor-pointer ${
                   isActive
                     ? 'bg-sky-500/15 text-sky-400 font-semibold shadow-inner border border-sky-500/30'
                     : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
                 }`}
               >
                 <div className="flex items-center gap-2.5">
-                  <span className="text-base">{item.icon}</span>
+                  <Icon className={`w-4 h-4 ${isActive ? 'text-sky-400' : 'text-slate-400'}`} />
                   <span>{item.label}</span>
                 </div>
-                {item.badge && (
-                  <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-amber-400/20 text-amber-300 border border-amber-400/30">
-                    {item.badge}
+                {showBadge && (
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                    {pendingApprovalsCount}
                   </span>
                 )}
               </button>
@@ -105,34 +151,50 @@ export function App() {
         </nav>
 
         <div className="p-4 border-t border-slate-800/80 text-xs text-slate-400">
-          <div className="flex items-center gap-2">
-            <span className="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="font-medium text-slate-300">Engine Online</span>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="font-medium text-slate-300 text-[11px]">Core Orchestrator</span>
+            </div>
+            <span className="text-[10px] font-mono text-slate-500">READY</span>
           </div>
-          <div className="mt-1 text-slate-400">v1.0.0 (Phase 3 Breadth)</div>
         </div>
       </aside>
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col overflow-y-auto">
-        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 shadow-xs sticky top-0 z-10">
-          <div className="flex items-center gap-2 text-sm">
+        <header className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-8 shadow-xs sticky top-0 z-10">
+          <div className="flex items-center gap-2 text-xs">
             <span className="text-slate-400 font-medium">Control Plane</span>
             <span className="text-slate-300">/</span>
-            <span className="font-semibold text-slate-800">
-              {NAV_ITEMS.find((n) => n.id === activeTab)?.label}
-            </span>
+            <span className="font-semibold text-slate-800">{activeNav?.label}</span>
           </div>
 
-          <div className="flex items-center gap-4 text-xs">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-amber-50 border border-amber-200 text-amber-900 font-medium">
-              <span>Approval Gate:</span>
-              <span className="font-bold">1 Pending Review</span>
-            </div>
-            <div className="flex items-center gap-1.5 text-emerald-600 font-medium">
+          <div className="flex items-center gap-3">
+            {pendingApprovalsCount > 0 ? (
+              <button
+                onClick={() => handleTabChange('approval')}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium hover:bg-amber-100 transition-colors cursor-pointer"
+              >
+                <IconAlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                <span>
+                  Approval Gate: <strong className="font-bold">{pendingApprovalsCount} Pending</strong>
+                </span>
+              </button>
+            ) : null}
+
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-50/70 border border-emerald-100 text-[11px] font-medium text-emerald-700">
               <span className="w-2 h-2 rounded-full bg-emerald-500" />
-              API Connected
+              <span>System Operational</span>
             </div>
+
+            <button
+              onClick={handleManualRefresh}
+              title="Refresh Control Plane Status"
+              className="p-1.5 rounded-md text-slate-500 hover:text-slate-800 hover:bg-slate-100 border border-slate-200 transition-colors cursor-pointer"
+            >
+              <IconRefresh className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-sky-600' : ''}`} />
+            </button>
           </div>
         </header>
 

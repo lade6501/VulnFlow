@@ -45,6 +45,7 @@ class VulnFlowState:
 
     # Remediation, testing & PRs
     patches: List[Dict[str, Any]] = field(default_factory=list)
+    created_branches: List[str] = field(default_factory=list)
     test_results: List[Dict[str, Any]] = field(default_factory=list)
     pull_requests: List[Dict[str, Any]] = field(default_factory=list)
     verification_results: List[Dict[str, Any]] = field(default_factory=list)
@@ -80,6 +81,7 @@ class VulnFlowState:
             "rejected_plans": [p.to_dict() for p in self.rejected_plans],
             "pending_approval_plans": [p.to_dict() for p in self.pending_approval_plans],
             "patches": self.patches,
+            "created_branches": self.created_branches,
             "test_results": self.test_results,
             "pull_requests": self.pull_requests,
             "verification_results": self.verification_results,
@@ -121,6 +123,8 @@ class VulnFlowState:
             state.pending_approval_plans = [RemediationPlan.from_dict(p) if isinstance(p, dict) else p for p in data["pending_approval_plans"]]
         if "patches" in data:
             state.patches = data["patches"]
+        if "created_branches" in data:
+            state.created_branches = data["created_branches"]
         if "test_results" in data:
             state.test_results = data["test_results"]
         if "pull_requests" in data:

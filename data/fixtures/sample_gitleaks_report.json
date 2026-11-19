@@ -1,0 +1,26 @@
+[
+  {
+    "Description": "AWS Access Key ID exposed in source code",
+    "StartLine": 17,
+    "EndLine": 17,
+    "StartColumn": 25,
+    "EndColumn": 45,
+    "Match": "AKIAIOSFODNN7EXAMPLE",
+    "Secret": "AKIAIOSFODNN7EXAMPLE",
+    "File": "javascript_sast_vulnerabilities.js",
+    "RuleID": "aws-access-token",
+    "Fingerprint": "AKIAIOSFODNN7EXAMPLE"
+  },
+  {
+    "Description": "Unmasked Social Security Number (PII) exposed in source code",
+    "StartLine": 21,
+    "EndLine": 21,
+    "StartColumn": 18,
+    "EndColumn": 29,
+    "Match": "000-12-3456",
+    "Secret": "000-12-3456",
+    "File": "javascript_sast_vulnerabilities.js",
+    "RuleID": "pii-social-security-number",
+    "Fingerprint": "000-12-3456"
+  }
+]

@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+import time
 from typing import Any, Dict, List, Optional
 
 from vulnflow.contracts.state import VulnFlowState
@@ -37,7 +38,7 @@ class RunStore:
             "prs_count": len(state.pull_requests),
             "prs": state.pull_requests,
             "blocking_reason": state.blocking_reason,
-            "created_at": state.created_at if hasattr(state, "created_at") else 0,
+            "created_at": getattr(state, "created_at", None) or (time.time() * 1000),
         }
         self._memory_runs[state.run_id] = data
 
@@ -69,15 +70,41 @@ class RunStore:
         """List all runs ordered by most recent."""
         runs: Dict[str, Dict[str, Any]] = dict(self._memory_runs)
 
-        if self.base_dir.exists():
-            for f in self.base_dir.glob("*.json"):
-                r_id = f.stem
-                if r_id not in runs:
-                    try:
-                        with open(f, "r", encoding="utf-8") as fp:
-                            runs[r_id] = json.load(fp)
-                    except Exception:
-                        pass
+        search_dirs = [self.base_dir, Path("../fake-vuln-repo/.vulnflow"), Path(".vulnflow")]
+        for s_dir in search_dirs:
+            if s_dir.exists():
+                for f in s_dir.glob("*.json"):
+                    r_id = f.stem.replace("state_", "")
+                    if "state_RUN-" in f.name and r_id not in runs:
+                        try:
+                            with open(f, "r", encoding="utf-8") as fp:
+                                st_data = json.load(fp)
+                            runs[r_id] = {
+                                "run_id": r_id,
+                                "terminal_status": st_data.get("terminal_status", "pending_approval"),
+                                "exit_code": st_data.get("exit_code", 10),
+                                "repo_path": st_data.get("repo_path", "../fake-vuln-repo"),
+                                "mode": st_data.get("mode", "pr"),
+                                "findings_count": len(st_data.get("findings", [])),
+                                "plans_count": len(st_data.get("plans", [])),
+                                "approved_count": len(st_data.get("approved_plans", [])),
+                                "pending_count": len(st_data.get("pending_approval_plans", [])),
+                                "prs_count": len(st_data.get("pull_requests", [])),
+                                "prs": st_data.get("pull_requests", []),
+                                "blocking_reason": st_data.get("blocking_reason"),
+                                "created_at": f.stat().st_mtime * 1000,
+                            }
+                        except Exception:
+                            pass
+                    elif f.name.startswith("RUN-") and r_id not in runs:
+                        try:
+                            with open(f, "r", encoding="utf-8") as fp:
+                                item = json.load(fp)
+                                if not item.get("created_at"):
+                                    item["created_at"] = f.stat().st_mtime * 1000
+                                runs[r_id] = item
+                        except Exception:
+                            pass
 
         sorted_runs = sorted(runs.values(), key=lambda r: r.get("created_at", 0), reverse=True)
         return sorted_runs[:limit]

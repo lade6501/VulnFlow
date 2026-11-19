@@ -20,9 +20,9 @@ for _p in (str(_SRC_DIR), str(_REPO_ROOT)):
 
 logger = logging.getLogger("vulnflow.api")
 
-from api.routes.approvals import submit_approval
+from api.routes.approvals import list_pending_approvals, submit_approval
 from api.routes.graph import get_graph_data
-from api.routes.runs import get_run, list_runs, trigger_run
+from api.routes.runs import get_run, get_run_report, list_runs, trigger_run
 from api.routes.webhooks import handle_scan_webhook
 
 try:
@@ -59,6 +59,13 @@ try:
             raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
         return run
 
+    @app.get("/api/runs/{run_id}/report")
+    def api_get_run_report(run_id: str) -> Dict[str, Any]:
+        report = get_run_report(run_id)
+        if not report:
+            raise HTTPException(status_code=404, detail=f"Report for run {run_id} not found")
+        return {"run_id": run_id, "report": report}
+
     @app.post("/api/runs")
     async def api_trigger_run(request: Request) -> Dict[str, Any]:
         payload = await request.json()
@@ -68,6 +75,10 @@ try:
     async def api_webhook(request: Request) -> Dict[str, Any]:
         payload = await request.json()
         return handle_scan_webhook(payload)
+
+    @app.get("/api/approvals")
+    def api_list_approvals(repo: str = "") -> Dict[str, Any]:
+        return {"plans": list_pending_approvals(repo_path=repo or None)}
 
     @app.post("/api/approvals/{plan_id}")
     async def api_approval(plan_id: str, request: Request) -> Dict[str, Any]:
@@ -112,6 +123,13 @@ except ImportError:
                 elif path == "/api/runs" and method == "GET":
                     limit = int(params.get("limit", [50])[0])
                     await self._send_json(send, 200, {"runs": list_runs(limit=limit)})
+                elif path.startswith("/api/runs/") and path.endswith("/report") and method == "GET":
+                    run_id = path.split("/")[3]
+                    report = get_run_report(run_id)
+                    if report:
+                        await self._send_json(send, 200, {"run_id": run_id, "report": report})
+                    else:
+                        await self._send_json(send, 404, {"detail": f"Report for run {run_id} not found"})
                 elif path.startswith("/api/runs/") and method == "GET":
                     run_id = path.split("/")[-1]
                     run = get_run(run_id)
@@ -127,6 +145,9 @@ except ImportError:
                     body = await self._read_json(receive)
                     result = handle_scan_webhook(body)
                     await self._send_json(send, 200, result)
+                elif path == "/api/approvals" and method == "GET":
+                    repo_arg = params.get("repo", [""])[0]
+                    await self._send_json(send, 200, {"plans": list_pending_approvals(repo_path=repo_arg or None)})
                 elif path.startswith("/api/approvals/") and method == "POST":
                     plan_id = path.split("/")[-1]
                     body = await self._read_json(receive)

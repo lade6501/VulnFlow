@@ -1,20 +1,35 @@
 """
 src/vulnflow/observability/audit_log.py
-Records immutable audit logs for all security actions, agent decisions, and human approvals.
+Cryptographic hash-chained audit logging for security actions, decisions, and approvals.
 """
 
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import logging
 import os
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("vulnflow.observability.audit_log")
+
+
+def compute_event_hash(
+    run_id: str,
+    event_type: str,
+    actor: str,
+    payload: Dict[str, Any],
+    timestamp: float,
+    previous_hash: str,
+) -> str:
+    """Compute SHA-256 cryptographic hash over an audit event record."""
+    canonical_payload = json.dumps(payload, sort_keys=True)
+    raw = f"{previous_hash}|{run_id}|{event_type}|{actor}|{canonical_payload}|{timestamp:.6f}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 @dataclass
@@ -29,16 +44,22 @@ class AuditEvent:
     iso_time: str = field(
         default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat()
     )
+    previous_hash: str = field(default_factory=lambda: "0" * 64)
+    entry_hash: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
 
 class AuditLogger:
-    """Manages appending, persisting, and retrieving audit trail events for compliance and verification."""
+    """
+    Manages appending, persisting, and verifying tamper-evident audit trail events
+    secured by SHA-256 cryptographic hash chaining.
+    """
 
     def __init__(self, log_dir: Optional[str] = None) -> None:
         self.events: List[AuditEvent] = []
+        self._last_hash: Dict[str, str] = {}
         target_dir = log_dir or os.environ.get("VULNFLOW_AUDIT_DIR", ".vulnflow/audit")
         self.log_dir = Path(target_dir) if target_dir else None
         if self.log_dir:
@@ -55,15 +76,37 @@ class AuditLogger:
         actor: str,
         payload: Dict[str, Any],
     ) -> AuditEvent:
-        """Create and record an audit event to memory and JSONL persistent storage."""
+        """Create and record an audit event with cryptographic hash chaining."""
+        prev_hash = self._last_hash.get(run_id, "0" * 64)
+        ts = time.time()
+        entry_hash = compute_event_hash(
+            run_id=run_id,
+            event_type=event_type,
+            actor=actor,
+            payload=payload,
+            timestamp=ts,
+            previous_hash=prev_hash,
+        )
+
         event = AuditEvent(
             run_id=run_id,
             event_type=event_type,
             actor=actor,
             payload=payload,
+            timestamp=ts,
+            previous_hash=prev_hash,
+            entry_hash=entry_hash,
         )
+        self._last_hash[run_id] = entry_hash
         self.events.append(event)
-        logger.info("AUDIT [%s] %s by %s: %s", run_id, event_type, actor, payload)
+        logger.info(
+            "AUDIT [%s] %s by %s (hash: %s): %s",
+            run_id,
+            event_type,
+            actor,
+            entry_hash[:12],
+            payload,
+        )
 
         if self.log_dir:
             out_file = self.log_dir / f"audit_{run_id}.jsonl"
@@ -88,6 +131,53 @@ class AuditLogger:
         out_file = self.log_dir / f"audit_{run_id}.jsonl"
         return out_file if out_file.exists() else None
 
+    def verify_chain(self, run_id: str) -> Tuple[bool, Optional[str]]:
+        """
+        Verify the cryptographic hash chain for a specific run.
+        Returns (True, None) if unbroken, or (False, reason) if tampered or corrupt.
+        """
+        events: List[Dict[str, Any]] = []
+        audit_file = self.get_audit_file(run_id)
+        if audit_file and audit_file.exists():
+            with open(audit_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        events.append(json.loads(line))
+        else:
+            events = [e.to_dict() for e in self.get_events(run_id)]
+
+        if not events:
+            return True, None
+
+        expected_prev = "0" * 64
+        for idx, ev in enumerate(events):
+            if ev.get("previous_hash") != expected_prev:
+                return (
+                    False,
+                    f"Hash chain broken at index {idx}: previous_hash {ev.get('previous_hash')[:12]} "
+                    f"does not match expected {expected_prev[:12]}",
+                )
+
+            computed = compute_event_hash(
+                run_id=ev["run_id"],
+                event_type=ev["event_type"],
+                actor=ev["actor"],
+                payload=ev["payload"],
+                timestamp=ev["timestamp"],
+                previous_hash=expected_prev,
+            )
+            if ev.get("entry_hash") != computed:
+                return (
+                    False,
+                    f"Tampered record at index {idx}: entry_hash {ev.get('entry_hash')[:12]} "
+                    f"does not match recomputed hash {computed[:12]}",
+                )
+
+            expected_prev = ev["entry_hash"]
+
+        return True, None
+
     def format_timeline(self, run_id: str) -> List[Dict[str, Any]]:
         """Return a chronological sequence of actions for a given run."""
         events = self.get_events(run_id)
@@ -99,6 +189,7 @@ class AuditLogger:
                 "event_type": e.event_type,
                 "actor": e.actor,
                 "payload": e.payload,
+                "entry_hash": e.entry_hash[:12] if e.entry_hash else "",
             })
         return timeline
 

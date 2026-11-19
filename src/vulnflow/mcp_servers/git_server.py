@@ -97,6 +97,62 @@ class GitServer:
                 logger.warning("Could not checkout %s in %s: %s", branch_name, repo_dir, exc)
         return {"status": "checked_out", "branch": branch_name}
 
+    def git_has_branch(self, branch_name: str, repo_dir: str) -> bool:
+        """Check if branch exists in the repository."""
+        repo_path = Path(repo_dir)
+        if (repo_path / ".git").exists():
+            try:
+                res = subprocess.run(
+                    ["git", "branch", "--list", branch_name],
+                    cwd=str(repo_path),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=False,
+                )
+                return bool(res.stdout.strip())
+            except Exception:
+                pass
+        return False
+
+    def git_cleanup_branch(
+        self, branch_name: str, repo_dir: str, force: bool = True
+    ) -> Dict[str, Any]:
+        """
+        MCP tool: git_cleanup_branch - Cleans up an orphan branch after failure or cancellation.
+        Safely switches to default branch and deletes branch_name.
+        """
+        logger.info("Cleaning up orphan branch %s in %s", branch_name, repo_dir)
+        repo_path = Path(repo_dir)
+        deleted = False
+        if (repo_path / ".git").exists():
+            try:
+                # 1. Switch back to main or master
+                for fallback in ("main", "master"):
+                    res = subprocess.run(
+                        ["git", "checkout", fallback],
+                        cwd=str(repo_path),
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        check=False,
+                    )
+                    if res.returncode == 0:
+                        break
+                # 2. Delete branch
+                del_cmd = ["git", "branch", "-D" if force else "-d", branch_name]
+                del_res = subprocess.run(
+                    del_cmd,
+                    cwd=str(repo_path),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=False,
+                )
+                deleted = del_res.returncode == 0
+            except Exception as exc:
+                logger.warning("Error deleting branch %s: %s", branch_name, exc)
+        return {"status": "deleted" if deleted else "not_found", "branch": branch_name}
+
     def git_patch(self, file_path: str, diff: str, repo_dir: str) -> Dict[str, Any]:
         """MCP tool: git_patch - Applies unified diff to target file."""
         logger.info("Applying patch to %s in %s", file_path, repo_dir)
@@ -226,6 +282,18 @@ def git_commit(message: str, repo_dir: str, file_path: Optional[str] = None) -> 
 @mcp.tool(name="pr_create", description="Opens pull request targeting the concerned repository.")
 def pr_create(branch: str, body: str, title: Optional[str] = None, repo_dir: Optional[str] = None) -> Dict[str, Any]:
     return git_server.pr_create(branch, body, title, repo_dir=repo_dir)
+
+
+@mcp.tool(name="git_cleanup_branch", description="Deletes an orphan remediation branch.")
+def git_cleanup_branch(
+    branch_name: str, repo_dir: str, force: bool = True
+) -> Dict[str, Any]:
+    return git_server.git_cleanup_branch(branch_name, repo_dir, force=force)
+
+
+@mcp.tool(name="git_has_branch", description="Checks if branch exists in the repository.")
+def git_has_branch(branch_name: str, repo_dir: str) -> bool:
+    return git_server.git_has_branch(branch_name, repo_dir)
 
 
 if __name__ == "__main__":

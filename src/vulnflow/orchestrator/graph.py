@@ -74,76 +74,121 @@ class VulnFlowWorkflow:
                 },
             )
 
-            # If resuming a paused state at approval gate, resume directly from approve
-            if state.terminal_status == "pending_approval" and state.plans:
-                logger.info("Resuming paused workflow run %s at approval gate", state.run_id)
-                state.terminal_status = "running"
-            else:
-                # 1. Ingest
-                state = self.nodes["ingest"](state)
+            try:
+                # If resuming a paused state at approval gate, resume directly from approve
+                if state.terminal_status == "pending_approval" and state.plans:
+                    logger.info("Resuming paused workflow run %s at approval gate", state.run_id)
+                    state.terminal_status = "running"
+                else:
+                    # 1. Ingest
+                    state = self.nodes["ingest"](state)
 
-                # 2. Dedupe
-                state = self.nodes["dedupe"](state)
+                    # 2. Dedupe
+                    state = self.nodes["dedupe"](state)
 
-                # 3. Root cause
-                state = self.nodes["rootcause"](state)
+                    # 3. Root cause
+                    state = self.nodes["rootcause"](state)
 
-                # 4. Policy check
-                state = self.nodes["policy"](state)
-                if route_after_policy(state) == "exception":
+                    # 4. Policy check
+                    state = self.nodes["policy"](state)
+                    if route_after_policy(state) == "exception":
+                        state = self.nodes["exception"](state)
+                        return state
+
+                    # 5. Plan
+                    state = self.nodes["plan"](state)
+                    if route_after_plan(state) == "verify":  # Report-only mode
+                        state = self.nodes["verify"](state)
+                        return state
+
+                # 6. Approve gate
+                state = self.nodes["approve"](state)
+                approve_route = route_after_approve(state)
+                if approve_route == "pause":
+                    return state
+                elif approve_route == "exception":
                     state = self.nodes["exception"](state)
                     return state
 
-                # 5. Plan
-                state = self.nodes["plan"](state)
-                if route_after_plan(state) == "verify":  # Report-only mode
-                    state = self.nodes["verify"](state)
-                    return state
+                # 7. Fix & Test loop
+                while True:
+                    state = self.nodes["fix"](state)
+                    state = self.nodes["test"](state)
+                    route = route_after_test(state)
 
-            # 6. Approve gate
-            state = self.nodes["approve"](state)
-            approve_route = route_after_approve(state)
-            if approve_route == "pause":
+                    if route == "pr":
+                        break
+                    elif route == "fix":
+                        logger.warning("Test failed; retrying fix iteration %d", state.retry_count)
+                        continue
+                    else:  # route == "exception"
+                        state = self.nodes["exception"](state)
+                        return state
+
+                # 8. PR creation
+                state = self.nodes["pr"](state)
+
+                # 9. Verification rescan
+                state = self.nodes["verify"](state)
+
+                state.append_audit(
+                    "RUN_COMPLETED",
+                    "orchestrator",
+                    {
+                        "run_id": state.run_id,
+                        "terminal_status": state.terminal_status,
+                        "exit_code": state.exit_code,
+                        "findings_resolved": len(state.findings),
+                        "prs_opened": len(state.pull_requests),
+                    },
+                )
+
+                logger.info("VulnFlow run %s completed with status: %s", state.run_id, state.terminal_status)
                 return state
-            elif approve_route == "exception":
-                state = self.nodes["exception"](state)
+
+            except Exception as exc:
+                logger.exception("VulnFlow run %s failed with unhandled exception: %s", state.run_id, exc)
+                state.terminal_status = "error"
+                state.exit_code = 1
+                state.error = str(exc)
+                state.blocking_reason = f"Execution failed: {exc}"
+
+                # Clean up orphan branches created during this run that don't have opened PRs (F33)
+                from vulnflow.mcp_servers.git_server import git_server
+
+                opened_branches = {
+                    pr.get("branch")
+                    for pr in state.pull_requests
+                    if isinstance(pr, dict) and pr.get("branch")
+                }
+                cleaned_branches: list[str] = []
+                for b in getattr(state, "created_branches", []):
+                    if b not in opened_branches:
+                        try:
+                            res = git_server.git_cleanup_branch(b, state.repo_path)
+                            if res.get("status") == "deleted":
+                                cleaned_branches.append(b)
+                        except Exception as c_err:
+                            logger.warning("Could not delete orphan branch %s: %s", b, c_err)
+
+                if cleaned_branches:
+                    state.append_audit(
+                        "ORPHAN_CLEANUP",
+                        "orchestrator",
+                        {"cleaned_branches": cleaned_branches},
+                    )
+
+                state.append_audit(
+                    "RUN_FAILED",
+                    "orchestrator",
+                    {
+                        "run_id": state.run_id,
+                        "terminal_status": state.terminal_status,
+                        "exit_code": state.exit_code,
+                        "error": str(exc),
+                    },
+                )
                 return state
-
-            # 7. Fix & Test loop
-            while True:
-                state = self.nodes["fix"](state)
-                state = self.nodes["test"](state)
-                route = route_after_test(state)
-
-                if route == "pr":
-                    break
-                elif route == "fix":
-                    logger.warning("Test failed; retrying fix iteration %d", state.retry_count)
-                    continue
-                else:  # route == "exception"
-                    state = self.nodes["exception"](state)
-                    return state
-
-            # 8. PR creation
-            state = self.nodes["pr"](state)
-
-            # 9. Verification rescan
-            state = self.nodes["verify"](state)
-
-            state.append_audit(
-                "RUN_COMPLETED",
-                "orchestrator",
-                {
-                    "run_id": state.run_id,
-                    "terminal_status": state.terminal_status,
-                    "exit_code": state.exit_code,
-                    "findings_resolved": len(state.findings),
-                    "prs_opened": len(state.pull_requests),
-                },
-            )
-
-            logger.info("VulnFlow run %s completed with status: %s", state.run_id, state.terminal_status)
-            return state
 
 
 def build_graph() -> Any:
@@ -164,7 +209,15 @@ def build_graph() -> Any:
         workflow.add_node("verify", verify_node)
         workflow.add_node("exception", exception_node)
 
-        workflow.set_entry_point("ingest")
+        def route_entry(st: VulnFlowState) -> str:
+            if st.terminal_status in ("pending_approval", "running") and st.plans:
+                return "approve"
+            return "ingest"
+
+        workflow.set_conditional_entry_point(
+            route_entry,
+            {"ingest": "ingest", "approve": "approve"},
+        )
         workflow.add_edge("ingest", "dedupe")
         workflow.add_edge("dedupe", "rootcause")
         workflow.add_edge("rootcause", "policy")
@@ -182,7 +235,7 @@ def build_graph() -> Any:
         workflow.add_conditional_edges(
             "approve",
             route_after_approve,
-            {"fix": "fix", "exception": "exception"},
+            {"fix": "fix", "exception": "exception", "pause": END},
         )
         workflow.add_edge("fix", "test")
         workflow.add_conditional_edges(

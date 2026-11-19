@@ -110,6 +110,7 @@ class TraceManager:
 
 # Global tracer instance
 global_tracer = TraceManager()
+trace_manager = global_tracer
 
 
 def trace_span(

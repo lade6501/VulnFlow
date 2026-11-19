@@ -98,9 +98,9 @@ Paths are relative to `src/vulnflow/` unless they start with `api/`, `ui/`, `har
 | ID | Feature | Phase | Primary paths | Depends on | Acceptance criteria | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | F31 | Tracing | P0, P4 | `observability/tracing.py` | none | Every node, agent call and MCP call is a span with model, prompt version, tokens, latency and status; backend swappable by config | done |
-| F32 | Audit log | P4 | `observability/audit_log.py` | F31 | Append-only record of plans, policy decisions, approvals, PRs and verification results | done |
-| F33 | Failure handling | P4 | `orchestrator/`, `config.py` | F20 | Timeouts, retries with backoff and rate-limit handling; every run ends in a clear terminal status with no orphan branches, PRs or tickets | todo |
-| F34 | Prompt-injection defenses | P4 | `agents/prompts/`, `tests/security/` | F07 | Hostile changelog and advisory text does not change the plan; retrieved text is delimited as untrusted; the injection scenario passes | todo |
+| F32 | Audit log | P4 | `observability/audit_log.py` | F31 | Append-only record of plans, policy decisions, approvals, PRs and verification results with SHA-256 hash chaining | done |
+| F33 | Failure handling | P4 | `orchestrator/`, `orchestrator/retry.py` | F20 | Timeouts, retries with backoff and rate-limit handling; every run ends in a clear terminal status with no orphan branches, PRs or tickets | done |
+| F34 | Prompt-injection defenses | P4 | `agents/prompts/`, `core/sanitization.py`, `tests/security/` | F07 | Hostile changelog and advisory text does not change the plan; retrieved text is delimited as untrusted; the injection scenario passes | done |
 | F35 | Evaluation harness | P5 | `evals/` | F22 | `make eval` runs all scenarios and writes metrics: auto-fix rate, dedupe ratio, time to verified fix, policy violations, bad-fix rate, cost per finding | todo |
 | F42 | LLM provider abstraction | P1 | `llm/` | F04, F31 | At least two providers selectable by config; structured outputs validated; outbound prompts pass the redaction guard; usage reported to tracing; record and replay works in tests | done |
 
@@ -108,8 +108,8 @@ Paths are relative to `src/vulnflow/` unless they start with `api/`, `ui/`, `har
 
 | ID | Feature | Phase | Primary paths | Depends on | Acceptance criteria | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| F36 | Runs dashboard | P2 | `ui/src/pages/Runs.tsx`, `api/routes/runs.py`, `store/` | F27 | Lists runs with repo, status, counts, cost and exit code | todo |
-| F37 | Plan and approval screen | P2 | `ui/src/pages/PlanApproval.tsx`, `api/routes/plans.py`, `api/routes/approvals.py` | F21 | Shows plan, evidence, policy result, diff and results; approve or reject resumes or stops the run and records the approver | todo |
+| F36 | Runs dashboard | P2 | `ui/src/pages/Runs.tsx`, `api/routes/runs.py`, `store/` | F27 | Lists runs with repo, status, counts, cost and exit code | done |
+| F37 | Plan and approval screen | P2 | `ui/src/pages/PlanApproval.tsx`, `api/routes/plans.py`, `api/routes/approvals.py` | F21 | Shows plan, evidence, policy result, diff and results; approve or reject resumes or stops the run and records the approver | done |
 | F38 | Graph explorer | P3 | `ui/src/pages/GraphExplorer.tsx`, `api/routes/graph.py` | F05, F06 | Renders a root-cause and blast-radius subgraph from the API | done |
 | F39 | Policy and exceptions view | P3 | `ui/src/pages/PolicyExceptions.tsx` | F13 | Lists blocked-by-policy plans and exception tickets; approved-package lookup works | done |
 | F40 | Expiry view | P3 | `ui/src/pages/Expiry.tsx` | F24 | Lists artifacts by expiry date with renewal status | done |
@@ -150,3 +150,5 @@ Record changes to this file here (date, ID, what changed, who). Adding, removing
 | 2026-11-17 | F27-F28 | Complete CLI watch-expiry, composite action.yml, and GitHub Action adapter | Agent |
 | 2026-11-17 | P3-ALL | Complete Grype/OSV/Gitleaks (F01), licenses (F15), secrets (F23), expiry & renewal (F24-F25), Maven (F26), Jenkins/GitLab (F29), Webhook/API (F30), and UI (F38-F40) | Agent |
 | 2026-11-17 | P3-GATE | Phase 3 Gate passed: feature freeze across all scenarios, secrets, expiry, and CI systems | Agent |
+| 2026-11-19 | F31-F34 | Complete cryptographic hash-chained audit log (F32), failure handling & orphan cleanup (F33), prompt-injection defenses (F34), and UI screens (F36, F37) | Agent |
+| 2026-11-19 | P4-GATE | Phase 4 Gate passed: prompt injection neutralized, zero secret leaks, tamper detection verified, orphan branches cleaned on failure | Agent |

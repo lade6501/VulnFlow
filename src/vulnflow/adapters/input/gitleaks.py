@@ -79,7 +79,9 @@ class GitleaksAdapter:
                 line=int(start_line),
             )
 
-            finding_id = compute_finding_id("gitleaks", repo, f"secret:{rule_id}", "0.0.0", rule_id, file_path)
+            finding_id = compute_finding_id(
+                "gitleaks", repo, f"secret:{rule_id}", "0.0.0", [rule_id], file_path
+            )
             f = Finding(
                 id=finding_id,
                 type=FindingType.SECRET,
