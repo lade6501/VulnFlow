@@ -33,10 +33,10 @@ class NvidiaProvider(LLMClient):
 
     def __init__(
         self,
-        default_model: str = "meta/llama-3.1-70b-instruct",
+        default_model: str = "nvidia/nemotron-3.5-lightning-30b-a3b",
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
-        timeout: float = 15.0,
+        timeout: float = 60.0,
         max_retries: int = 3,
         **kwargs: Any,
     ) -> None:

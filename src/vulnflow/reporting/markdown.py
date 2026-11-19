@@ -47,7 +47,7 @@ def generate_markdown_report(state: VulnFlowState) -> str:
             lines.append(f"> - **Plan ID**: `{p.id}` (`{target_str}`)")
             lines.append(f">   • **Proposed Action**: `{p.action.value.upper()}` ➔ `{p.target_version or 'N/A'}` (Risk Tier: `{p.risk_tier.value.upper()}`)")
             lines.append(f">   • **Reason**: {reason_s}")
-            lines.append(f">   • **To Approve & Resume**: `python3 src/vulnflow/cli.py approve --plan-id {p.id} --reviewer \"<your-email>\" --resume --repo {state.repo_path}`")
+            lines.append(f">   • **To Approve & Resume**: `vulnflow approve --plan-id {p.id} --reviewer \"<your-email>\" --resume --repo {state.repo_path}`")
             lines.append(f"> ")
         if len(pending_plans) > 6:
             lines.append(f"> - *... and {len(pending_plans) - 6} additional plan(s)*")
@@ -134,7 +134,7 @@ def generate_markdown_report(state: VulnFlowState) -> str:
                 f"- **Root Cause Analysis**: {explanation}",
             ])
             if matched_plan and matched_plan.requires_approval:
-                lines.append(f"- **Approval CLI Command**: `python3 src/vulnflow/cli.py approve --plan-id {matched_plan.id} --reviewer \"<your-email>\" --resume --repo {state.repo_path}`")
+                lines.append(f"- **Approval CLI Command**: `vulnflow approve --plan-id {matched_plan.id} --reviewer \"<your-email>\" --resume --repo {state.repo_path}`")
             lines.extend([
                 f"",
                 f"#### 🧠 AI Remediation Proposal & Guidance (Plan ID: `{plan_id_str}`):",

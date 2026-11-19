@@ -37,6 +37,7 @@ ROLE_MODEL_DEFAULTS: Dict[str, Dict[str, str]] = {
     "openai": {
         "triage": "gpt-4o-mini",
         "planner": "gpt-4o",
+        "fixer": "gpt-4o",
         "rootcause": "gpt-4o",
         "verifier": "gpt-4o",
         "explainer": "gpt-4o-mini",
@@ -45,22 +46,25 @@ ROLE_MODEL_DEFAULTS: Dict[str, Dict[str, str]] = {
     "anthropic": {
         "triage": "claude-3-5-haiku-20241022",
         "planner": "claude-3-5-sonnet-20241022",
+        "fixer": "claude-3-5-sonnet-20241022",
         "rootcause": "claude-3-5-sonnet-20241022",
         "verifier": "claude-3-5-sonnet-20241022",
         "explainer": "claude-3-5-haiku-20241022",
         "default": "claude-3-5-sonnet-20241022",
     },
     "nvidia": {
-        "triage": "minimaxai/minimax-m3.1-flash",
-        "planner": "minimaxai/minimax-m3.1-flash",
-        "rootcause": "minimaxai/minimax-m3.1-flash",
-        "verifier": "minimaxai/minimax-m3.1-flash",
-        "explainer": "minimaxai/minimax-m3.1-flash",
-        "default": "minimaxai/minimax-m3.1-flash",
+        "triage": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "planner": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "fixer": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "rootcause": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "verifier": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "explainer": "nvidia/nemotron-3.5-lightning-30b-a3b",
+        "default": "nvidia/nemotron-3.5-lightning-30b-a3b",
     },
     "openrouter": {
         "triage": "meta-llama/llama-3.1-8b-instruct",
         "planner": "anthropic/claude-3.5-sonnet",
+        "fixer": "anthropic/claude-3.5-sonnet",
         "rootcause": "anthropic/claude-3.5-sonnet",
         "verifier": "anthropic/claude-3.5-sonnet",
         "explainer": "meta-llama/llama-3.1-8b-instruct",
@@ -69,6 +73,7 @@ ROLE_MODEL_DEFAULTS: Dict[str, Dict[str, str]] = {
     "bedrock": {
         "triage": "anthropic.claude-3-haiku-20240307-v1:0",
         "planner": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "fixer": "anthropic.claude-3-5-sonnet-20241022-v2:0",
         "rootcause": "anthropic.claude-3-5-sonnet-20241022-v2:0",
         "verifier": "anthropic.claude-3-5-sonnet-20241022-v2:0",
         "explainer": "anthropic.claude-3-haiku-20240307-v1:0",
@@ -77,6 +82,7 @@ ROLE_MODEL_DEFAULTS: Dict[str, Dict[str, str]] = {
     "ollama": {
         "triage": "llama3.1",
         "planner": "llama3.1",
+        "fixer": "llama3.1",
         "rootcause": "llama3.1",
         "verifier": "llama3.1",
         "explainer": "llama3.1",
@@ -204,21 +210,43 @@ def create_llm_client(
             f"Unsupported LLM provider '{target_provider}'. Supported: {list(PROVIDER_REGISTRY.keys())}"
         )
 
-    # Determine model: parameter override -> role config -> role default -> global config
+    # Check for configured provider-specific or global model in environment/settings
+    prov_model_env = (
+        settings.provider_models.get(target_provider)
+        or os.getenv(f"{target_provider.upper()}_MODEL")
+        or os.getenv(f"VULNFLOW_{target_provider.upper()}_MODEL")
+    )
+    global_model_env = os.getenv("VULNFLOW_LLM_MODEL") or os.getenv("LLM_MODEL")
+
+    # Determine model resolution:
+    # 1. Parameter override ('model')
+    # 2. Role-specific model override (e.g., VULNFLOW_ROLE_MODEL_PLANNER)
+    # 3. Provider-specific model from .env (e.g. OPENROUTER_MODEL, NVIDIA_MODEL, OPENAI_MODEL)
+    # 4. Global model from .env (VULNFLOW_LLM_MODEL, LLM_MODEL)
+    # 5. Role default recommended for this provider (from ROLE_MODEL_DEFAULTS)
+    # 6. Global fallback from settings or provider default
     target_model = (
         model
         or settings.role_models.get(clean_role)
+        or prov_model_env
+        or global_model_env
         or ROLE_MODEL_DEFAULTS.get(target_provider, {}).get(clean_role)
+        or ROLE_MODEL_DEFAULTS.get(target_provider, {}).get("default")
         or settings.llm.model
     )
 
     provider_cls = PROVIDER_REGISTRY[target_provider]
 
+    # Resolve provider credentials and endpoint
+    creds = settings.get_provider_credentials(target_provider)
+    resolved_api_key = kwargs.pop("api_key", creds.get("api_key") or settings.llm.api_key)
+    resolved_base_url = kwargs.pop("base_url", creds.get("base_url") or settings.llm.base_url)
+
     # Instantiate the base adapter
     base_client = provider_cls(
         default_model=target_model,
-        api_key=kwargs.pop("api_key", settings.llm.api_key),
-        base_url=kwargs.pop("base_url", settings.llm.base_url),
+        api_key=resolved_api_key,
+        base_url=resolved_base_url,
         timeout=kwargs.pop("timeout", settings.llm.timeout),
         max_retries=kwargs.pop("max_retries", settings.llm.max_retries),
         **kwargs,

@@ -133,45 +133,95 @@ GITHUB_TOKEN="ghp_..."
 
 ## 💻 Usage & CLI Reference
 
-### 1. Analyze and Remediate a Repository (PR Mode)
-Ingests scanner findings, groups by root cause, formulates plans, checks policy, and opens PRs:
-```bash
-vulnflow analyze \
-  --repo /path/to/target-repo \
-  --report /path/to/trivy-results.json \
-  --mode pr
-```
+VulnFlow can be executed directly as `vulnflow` (after running `./run.sh install` or `.\run.ps1 install`), or via the universal launchers:
+- **macOS / Linux**: `./run.sh <command> [options]`
+- **Windows PowerShell**: `.\run.ps1 <command> [options]`
+- **Windows CMD**: `run.bat <command> [options]`
 
-### 2. Report-Only Mode (Read-Only)
-Generates an executive vulnerability remediation report without making code changes:
-```bash
-# Generate Markdown Report
-vulnflow report \
-  --repo /path/to/target-repo \
-  --report /path/to/trivy-results.json \
-  --format markdown \
-  -o remediation_report.md
+---
 
-# Generate Structured JSON Report
-vulnflow report \
-  --repo /path/to/target-repo \
-  --report /path/to/trivy-results.json \
-  --format json \
-  -o remediation_report.json
-```
+### Command Overview
 
-### 3. Fast Offline Execution (`--no-llm`)
-Skips remote LLM calls and runs entirely on deterministic policy and knowledge rules:
-```bash
-vulnflow analyze --repo ./samples/npm-simple-bump --mode pr --no-llm
-```
+| Command | Purpose |
+|---|---|
+| **`vulnflow scan`** / **`analyze`** | Ingest scanner reports, deduplicate findings, evaluate policy, and formulate remediation plans (or open PRs). |
+| **`vulnflow report`** | Read-only assessment mode. Generates structured JSON or Markdown reports without modifying repository code. |
+| **`vulnflow serve`** | Launches the unified Web Dashboard and REST API on `http://localhost:8000` (zero pip packages required). |
+| **`vulnflow approve`** | Authorizes or rejects a `REVIEW`-tier remediation plan and resumes the workflow. |
+| **`vulnflow audit`** | Inspects chronological audit trails of past remediation runs. |
+| **`vulnflow install`** | Links the `vulnflow` executable into your user `PATH` for direct terminal access. |
 
-### 4. Inspect Chronological Audit Trail
-Inspect chronological audit logs from any run:
+---
+
+### Attributes & Options Reference (`scan`, `analyze`, `report`)
+
+| Flag / Option | Short | Type / Choices | Default | Description |
+|---|:---:|---|---|---|
+| `--repo` | | `PATH` | `.` | Target repository directory to inspect and remediate. |
+| `--mode` | | `report` \| `pr` \| `dry-run` | `pr` (in `scan`/`analyze`)<br>`report` (in `report`) | • **`report`**: Read-only assessment; no code changes.<br>• **`pr`**: Generate fixes, test in sandbox, and open GitHub PRs.<br>• **`dry-run`**: Formulate patches and test locally without opening remote PRs. |
+| `--report` | | `PATH` | *Auto-detected* | Path to existing scanner JSON or SARIF report. If omitted, auto-detects `gitleaks.json`, `trivy.json`, `grype.json`, or `snyk.json`. |
+| `--scanner` | | `trivy` \| `grype` \| `snyk` \| `gitleaks` | `trivy` | Security scanner format used to parse the report. |
+| `--ecosystem` | | `npm` \| `maven` \| `pip` | `npm` | Primary dependency ecosystem of the target repository. |
+| `--output` | `-o` | `PATH` | `.vulnflow/reports/report_<RUN_ID>.<ext>` | Destination file path to save the generated report. |
+| `--format` | | `markdown` \| `json` | `markdown` | Report format to write to disk (`markdown` or `json`). |
+| `--auto-approve` | | *Flag* (boolean) | `False` | Auto-approve all `REVIEW`-tier plans (e.g. secret rotations or major bumps) without pausing for human sign-off. |
+| `--no-llm` | | *Flag* (boolean) | `False` | Bypasses remote LLM calls and uses the fast, deterministic rule-based planner. Useful for offline runs or low-latency CI. |
+| `--langsmith` | | *Flag* (boolean) | `False` | Force-enables LangSmith distributed tracing. |
+| `--no-langsmith` | | *Flag* (boolean) | `False` | Explicitly disables LangSmith tracing even if `LANGSMITH_API_KEY` is present. |
+| `--langsmith-project` | | `STRING` | `vulnflow` | Overrides the target LangSmith project name. |
+
+---
+
+### Web Dashboard & Server Options (`serve`)
+
+| Flag / Option | Type | Default | Description |
+|---|---|---|---|
+| `--port` | `INT` | `8000` | Port to listen on. |
+| `--host` | `STRING` | `0.0.0.0` | Binding host address. |
+| `--dev` | *Flag* | `False` | Launch Vite development server with hot module reloading on `:5173`. |
+| `--build-ui` | *Flag* | `False` | Rebuild frontend React bundle before starting. |
+| `--reload` | *Flag* | `False` | Auto-reload backend on Python file modifications. |
+| `--open` | *Flag* | `False` | Automatically open default browser to Dashboard URL. |
+
+---
+
+### Governance & Approval Options (`approve`)
+
+| Flag / Option | Type | Default | Description |
+|---|---|---|---|
+| `--plan-id` | `STRING` | *Required* | Remediation plan ID to authorize or reject (e.g. `PLAN-SEC-FND-e750`). |
+| `--resume` | *Flag* | `False` | Automatically resume workflow execution and create PR upon approval. |
+| `--reviewer` | `STRING` | `security-lead` | Reviewer identifier or email address. |
+| `--reason` | `STRING` | `None` | Explanation or justification for approval/rejection decision. |
+| `--reject` | *Flag* | `False` | Reject the remediation plan instead of approving. |
+
+---
+
+### Common Command Recipes
+
 ```bash
-vulnflow audit
-# Or inspect specific run:
-vulnflow audit --run-id RUN-520d7e6e4f40
+# 1. Quick read-only report (no code changes)
+vulnflow scan --repo fake-vuln-repo --mode report
+# Or shorthand:
+vulnflow report --repo fake-vuln-repo
+
+# 2. Autonomous PR remediation (pauses on review tier for security approval)
+vulnflow scan --repo fake-vuln-repo --mode pr
+
+# 3. Fully unattended CI/CD (auto-approves review tier and opens PRs in one shot)
+vulnflow scan --repo fake-vuln-repo --mode pr --auto-approve
+
+# 4. Custom scanner report input with JSON output
+vulnflow scan --repo fake-vuln-repo --scanner gitleaks --report data/fixtures/sample_gitleaks_report.json --format json -o audit.json
+
+# 5. Fast offline deterministic execution (zero LLM calls)
+vulnflow scan --repo fake-vuln-repo --mode report --no-llm
+
+# 6. Authorize a review-tier plan and resume PR creation
+vulnflow approve --plan-id PLAN-SEC-FND-8ba1 --resume --repo fake-vuln-repo
+
+# 7. Start the Web Dashboard & API (zero pip packages required)
+vulnflow serve
 ```
 
 ---

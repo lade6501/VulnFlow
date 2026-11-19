@@ -24,8 +24,8 @@ DEFAULT_PRICING: Dict[str, Tuple[float, float]] = {
     "claude-3-5-haiku-20241022": (0.80, 4.00),
     "claude-3-opus-20240229": (15.00, 75.00),
     # Nvidia NIM (standard catalog estimates per 1M tokens)
-    "meta/llama-3.1-70b-instruct": (0.70, 0.90),
-    "meta/llama-3.1-8b-instruct": (0.20, 0.20),
+    "minimaxai/minimax-m3.1-flash": (0.70, 0.90),
+    "minimaxai/minimax-m3.1-flash": (0.20, 0.20),
     "meta/llama-3.1-405b-instruct": (3.00, 3.00),
     "mistralai/mixtral-8x22b-instruct-v0.1": (0.90, 0.90),
     # Bedrock Converse mappings

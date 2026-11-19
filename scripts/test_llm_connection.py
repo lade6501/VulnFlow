@@ -18,8 +18,10 @@ from vulnflow.llm import LLMMessage, create_llm_client
 
 
 def main() -> None:
-    provider = os.getenv("VULNFLOW_LLM_PROVIDER") or settings.llm.provider or "nvidia"
-    api_key = settings.llm.api_key or os.getenv("NVIDIA_API_KEY") or os.getenv("NVCF_AUTH_TOKEN")
+    provider = (os.getenv("VULNFLOW_LLM_PROVIDER") or settings.llm.provider or "nvidia").lower()
+    creds = settings.get_provider_credentials(provider)
+    api_key = creds.get("api_key") or settings.llm.api_key
+    base_url = creds.get("base_url") or settings.llm.base_url
 
     print("=" * 65)
     print("VulnFlow LLM Provider Connectivity Test")
@@ -30,19 +32,26 @@ def main() -> None:
         masked_key = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
         print(f"Detected API Key: {masked_key}")
     else:
-        print("Detected API Key: NONE (Please export NVIDIA_API_KEY or set in .env)")
+        print(f"Detected API Key: NONE (Please export {provider.upper()}_API_KEY or set in .env)")
 
-    print(f"Base URL:         {settings.llm.base_url or 'Default vendor endpoint'}")
-    print(f"Configured Model: {settings.llm.model}")
+    print(f"Base URL:         {base_url or 'Default vendor endpoint'}")
+    active_model = (
+        settings.provider_models.get(provider)
+        or os.getenv(f"{provider.upper()}_MODEL")
+        or os.getenv("VULNFLOW_LLM_MODEL")
+        or os.getenv("LLM_MODEL")
+        or settings.llm.model
+    )
+    print(f"Configured Model: {active_model}")
     print("-" * 65)
 
     if not api_key and provider not in ("ollama", "local"):
         print("\n❌ Error: No API key detected!")
-        print("To test Nvidia NIM, please run:")
-        print("  export NVIDIA_API_KEY=\"nvapi-your-key-here\"")
+        print(f"To test {provider.upper()}, please run:")
+        print(f"  export {provider.upper()}_API_KEY=\"your-key-here\"")
         print("  python3 scripts/test_llm_connection.py\n")
         print("Or add it to a .env file in the vulnflow directory:")
-        print("  echo 'NVIDIA_API_KEY=\"nvapi-your-key\"' > .env")
+        print(f"  echo '{provider.upper()}_API_KEY=\"your-key\"' >> .env")
         sys.exit(1)
 
     print("Sending live test prompt to model...")

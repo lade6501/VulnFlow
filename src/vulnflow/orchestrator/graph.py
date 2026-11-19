@@ -29,6 +29,7 @@ from vulnflow.orchestrator.routing import (
     route_after_test,
 )
 from vulnflow.observability.tracing import trace_span
+from vulnflow.observability.langsmith_tracer import langsmith_tracer
 
 logger = logging.getLogger("vulnflow.orchestrator.graph")
 
@@ -54,6 +55,33 @@ class VulnFlowWorkflow:
             "exception": exception_node,
         }
 
+    def _run_node(self, node_name: str, st: VulnFlowState) -> VulnFlowState:
+        """Execute a node while timing and recording child span in LangSmith and local tracer."""
+        import time
+
+        t0 = time.time()
+        err_msg: Optional[str] = None
+        try:
+            return self.nodes[node_name](st)
+        except Exception as exc:
+            err_msg = str(exc)
+            raise
+        finally:
+            dur_ms = round((time.time() - t0) * 1000.0, 2)
+            langsmith_tracer.record_node_span(
+                workflow_run_id=st.run_id,
+                node_name=node_name,
+                inputs={"mode": st.mode, "status": st.terminal_status},
+                outputs={
+                    "status": st.terminal_status,
+                    "findings": len(st.findings),
+                    "plans": len(st.plans),
+                    "exit_code": st.exit_code,
+                },
+                duration_ms=dur_ms,
+                error=err_msg,
+            )
+
     def execute(self, state: VulnFlowState) -> VulnFlowState:
         """
         Execute the end-to-end workflow transitions following Section 6.5:
@@ -61,6 +89,25 @@ class VulnFlowWorkflow:
         """
         with trace_span("workflow.execute", {"run_id": state.run_id}):
             logger.info("Starting VulnFlow run %s in '%s' mode", state.run_id, state.mode)
+
+            # Start root trace in LangSmith
+            langsmith_tracer.start_workflow_run(
+                run_id=state.run_id,
+                name="vulnflow.workflow",
+                inputs={
+                    "repo_path": state.repo_path,
+                    "report_path": state.report_path,
+                    "scanner": state.scanner,
+                    "mode": state.mode,
+                    "ecosystem": state.ecosystem,
+                },
+                tags=["vulnflow", state.mode, state.scanner],
+                metadata={
+                    "run_id": state.run_id,
+                    "auto_approve": state.auto_approve,
+                },
+            )
+
             state.append_audit(
                 "RUN_STARTED",
                 "orchestrator",
@@ -81,39 +128,59 @@ class VulnFlowWorkflow:
                     state.terminal_status = "running"
                 else:
                     # 1. Ingest
-                    state = self.nodes["ingest"](state)
+                    state = self._run_node("ingest", state)
 
                     # 2. Dedupe
-                    state = self.nodes["dedupe"](state)
+                    state = self._run_node("dedupe", state)
 
                     # 3. Root cause
-                    state = self.nodes["rootcause"](state)
+                    state = self._run_node("rootcause", state)
 
                     # 4. Policy check
-                    state = self.nodes["policy"](state)
+                    state = self._run_node("policy", state)
                     if route_after_policy(state) == "exception":
-                        state = self.nodes["exception"](state)
+                        state = self._run_node("exception", state)
+                        langsmith_tracer.end_workflow_run(
+                            state.run_id,
+                            outputs={"terminal_status": state.terminal_status, "exit_code": state.exit_code},
+                            status=state.terminal_status,
+                        )
                         return state
 
                     # 5. Plan
-                    state = self.nodes["plan"](state)
+                    state = self._run_node("plan", state)
                     if route_after_plan(state) == "verify":  # Report-only mode
-                        state = self.nodes["verify"](state)
+                        state = self._run_node("verify", state)
+                        langsmith_tracer.end_workflow_run(
+                            state.run_id,
+                            outputs={"terminal_status": state.terminal_status, "exit_code": state.exit_code},
+                            status=state.terminal_status,
+                        )
                         return state
 
                 # 6. Approve gate
-                state = self.nodes["approve"](state)
+                state = self._run_node("approve", state)
                 approve_route = route_after_approve(state)
                 if approve_route == "pause":
+                    langsmith_tracer.end_workflow_run(
+                        state.run_id,
+                        outputs={"terminal_status": state.terminal_status, "exit_code": state.exit_code},
+                        status="PENDING_APPROVAL",
+                    )
                     return state
                 elif approve_route == "exception":
-                    state = self.nodes["exception"](state)
+                    state = self._run_node("exception", state)
+                    langsmith_tracer.end_workflow_run(
+                        state.run_id,
+                        outputs={"terminal_status": state.terminal_status, "exit_code": state.exit_code},
+                        status=state.terminal_status,
+                    )
                     return state
 
                 # 7. Fix & Test loop
                 while True:
-                    state = self.nodes["fix"](state)
-                    state = self.nodes["test"](state)
+                    state = self._run_node("fix", state)
+                    state = self._run_node("test", state)
                     route = route_after_test(state)
 
                     if route == "pr":
@@ -122,14 +189,19 @@ class VulnFlowWorkflow:
                         logger.warning("Test failed; retrying fix iteration %d", state.retry_count)
                         continue
                     else:  # route == "exception"
-                        state = self.nodes["exception"](state)
+                        state = self._run_node("exception", state)
+                        langsmith_tracer.end_workflow_run(
+                            state.run_id,
+                            outputs={"terminal_status": state.terminal_status, "exit_code": state.exit_code},
+                            status=state.terminal_status,
+                        )
                         return state
 
                 # 8. PR creation
-                state = self.nodes["pr"](state)
+                state = self._run_node("pr", state)
 
                 # 9. Verification rescan
-                state = self.nodes["verify"](state)
+                state = self._run_node("verify", state)
 
                 state.append_audit(
                     "RUN_COMPLETED",
@@ -144,6 +216,16 @@ class VulnFlowWorkflow:
                 )
 
                 logger.info("VulnFlow run %s completed with status: %s", state.run_id, state.terminal_status)
+                langsmith_tracer.end_workflow_run(
+                    state.run_id,
+                    outputs={
+                        "terminal_status": state.terminal_status,
+                        "exit_code": state.exit_code,
+                        "findings_resolved": len(state.findings),
+                        "prs_opened": len(state.pull_requests),
+                    },
+                    status=state.terminal_status,
+                )
                 return state
 
             except Exception as exc:
@@ -152,6 +234,13 @@ class VulnFlowWorkflow:
                 state.exit_code = 1
                 state.error = str(exc)
                 state.blocking_reason = f"Execution failed: {exc}"
+
+                langsmith_tracer.end_workflow_run(
+                    state.run_id,
+                    outputs={"terminal_status": "error", "exit_code": 1},
+                    error=str(exc),
+                    status="ERROR",
+                )
 
                 # Clean up orphan branches created during this run that don't have opened PRs (F33)
                 from vulnflow.mcp_servers.git_server import git_server
@@ -258,6 +347,15 @@ def run_workflow(state: Optional[VulnFlowState] = None, **kwargs: Any) -> VulnFl
     wf_state = state or VulnFlowState(**kwargs)
     runner = build_graph()
     if hasattr(runner, "invoke"):
-        result = runner.invoke(wf_state)
+        config = {
+            "tags": ["vulnflow", wf_state.mode, wf_state.scanner],
+            "metadata": {
+                "run_id": wf_state.run_id,
+                "repo_path": wf_state.repo_path,
+                "scanner": wf_state.scanner,
+                "mode": wf_state.mode,
+            },
+        }
+        result = runner.invoke(wf_state, config=config)
         return result if isinstance(result, VulnFlowState) else VulnFlowState(**result)
     return runner.execute(wf_state)

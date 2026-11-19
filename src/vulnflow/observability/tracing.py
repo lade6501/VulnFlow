@@ -112,6 +112,8 @@ class TraceManager:
 global_tracer = TraceManager()
 trace_manager = global_tracer
 
+from vulnflow.observability.langsmith_tracer import langsmith_tracer
+
 
 def trace_span(
     name: str,

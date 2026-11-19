@@ -11,7 +11,7 @@ The `vulnflow.llm` package provides a centralized, provider-agnostic abstraction
 
 ## 1. Architectural Principles
 
-1. **Strict Vendor Isolation**: *Nothing outside `llm/` imports vendor LLM SDKs.* All agents, orchestrators, and knowledge services interact exclusively with the `LLMClient` interface.
+1. **Strict Vendor Isolation**: _Nothing outside `llm/` imports vendor LLM SDKs._ All agents, orchestrators, and knowledge services interact exclusively with the `LLMClient` interface.
 2. **Standard-Library Core**: The core HTTP transport, JSON extraction, redaction, and recording engines are self-contained and runnable using Python's standard library with zero mandatory external pip dependencies, while dynamically interoperating with Pydantic and OpenTelemetry when available.
 3. **Defense-in-Depth Redaction Guard**: Outbound prompts are automatically scanned and scrubbed for API tokens, secret keys, and credentials before transmission. Untrusted inputs are wrapped in tamper-resistant delimiters.
 4. **Bounded Schema Self-Correction**: Structured outputs are validated against Pydantic models or dataclasses with automated feedback retries upon parse or validation failures.
@@ -52,14 +52,14 @@ LLMResponse Object returned to Caller
 
 ## 3. Supported Providers
 
-| Provider | Adapter Class | Default Endpoint | Default Role Model | Authentication |
-|---|---|---|---|---|
-| **OpenAI** | `OpenAIProvider` | `https://api.openai.com/v1` | `gpt-4o` | `OPENAI_API_KEY` |
-| **Anthropic** | `AnthropicProvider` | `https://api.anthropic.com/v1` | `claude-3-5-sonnet-20241022` | `ANTHROPIC_API_KEY` |
-| **Nvidia NIM** | `NvidiaProvider` | `https://integrate.api.nvidia.com/v1` | `meta/llama-3.1-70b-instruct` | `NVIDIA_API_KEY` / `NVCF_AUTH_TOKEN` |
-| **OpenRouter** | `OpenRouterProvider` | `https://openrouter.ai/api/v1` | `anthropic/claude-3.5-sonnet` | `OPENROUTER_API_KEY` |
-| **Ollama** | `OllamaProvider` | `http://localhost:11434` | `llama3.1` | None (Local daemon) |
-| **AWS Bedrock** | `BedrockProvider` | AWS Region Endpoint | `anthropic.claude-3-5-sonnet-20241022-v2:0` | AWS IAM / `AWS_ACCESS_KEY_ID` |
+| Provider        | Adapter Class        | Default Endpoint                      | Default Role Model                          | Authentication                       |
+| --------------- | -------------------- | ------------------------------------- | ------------------------------------------- | ------------------------------------ |
+| **OpenAI**      | `OpenAIProvider`     | `https://api.openai.com/v1`           | `gpt-4o`                                    | `OPENAI_API_KEY`                     |
+| **Anthropic**   | `AnthropicProvider`  | `https://api.anthropic.com/v1`        | `claude-3-5-sonnet-20241022`                | `ANTHROPIC_API_KEY`                  |
+| **Nvidia NIM**  | `NvidiaProvider`     | `https://integrate.api.nvidia.com/v1` | `nvidia/nemotron-3.5-lightning-30b-a3b`      | `NVIDIA_API_KEY` / `NVCF_AUTH_TOKEN` |
+| **OpenRouter**  | `OpenRouterProvider` | `https://openrouter.ai/api/v1`        | `anthropic/claude-3.5-sonnet`               | `OPENROUTER_API_KEY`                 |
+| **Ollama**      | `OllamaProvider`     | `http://localhost:11434`              | `llama3.1`                                  | None (Local daemon)                  |
+| **AWS Bedrock** | `BedrockProvider`    | AWS Region Endpoint                   | `anthropic.claude-3-5-sonnet-20241022-v2:0` | AWS IAM / `AWS_ACCESS_KEY_ID`        |
 
 ---
 
@@ -67,13 +67,13 @@ LLMResponse Object returned to Caller
 
 VulnFlow assigns specialized models to agent roles based on task complexity, latency sensitivity, and reasoning depth:
 
-| Agent Role | OpenAI | Anthropic | Nvidia NIM | OpenRouter | Ollama (Local) |
-|---|---|---|---|---|---|
-| **Triage** (Fast, categorization) | `gpt-4o-mini` | `claude-3-5-haiku-20241022` | `meta/llama-3.1-8b-instruct` | `meta-llama/llama-3.1-8b-instruct` | `llama3.1` |
-| **Planner** (Deep strategy) | `gpt-4o` | `claude-3-5-sonnet-20241022` | `meta/llama-3.1-70b-instruct` | `anthropic/claude-3.5-sonnet` | `llama3.1` |
-| **RootCause** (Graph & code analysis) | `gpt-4o` | `claude-3-5-sonnet-20241022` | `meta/llama-3.1-70b-instruct` | `anthropic/claude-3.5-sonnet` | `llama3.1` |
-| **Verifier** (Diffs, builds, tests) | `gpt-4o` | `claude-3-5-sonnet-20241022` | `meta/llama-3.1-70b-instruct` | `anthropic/claude-3.5-sonnet` | `llama3.1` |
-| **Explainer** (PRs & dev reports) | `gpt-4o-mini` | `claude-3-5-haiku-20241022` | `meta/llama-3.1-8b-instruct` | `meta-llama/llama-3.1-8b-instruct` | `llama3.1` |
+| Agent Role                            | OpenAI        | Anthropic                    | Nvidia NIM                     | OpenRouter                         | Ollama (Local) |
+| ------------------------------------- | ------------- | ---------------------------- | ------------------------------ | ---------------------------------- | -------------- |
+| **Triage** (Fast, categorization)     | `gpt-4o-mini` | `claude-3-5-haiku-20241022`  | `minimaxai/minimax-m3.1-flash` | `meta-llama/llama-3.1-8b-instruct` | `llama3.1`     |
+| **Planner** (Deep strategy)           | `gpt-4o`      | `claude-3-5-sonnet-20241022` | `minimaxai/minimax-m3.1-flash` | `anthropic/claude-3.5-sonnet`      | `llama3.1`     |
+| **RootCause** (Graph & code analysis) | `gpt-4o`      | `claude-3-5-sonnet-20241022` | `minimaxai/minimax-m3.1-flash` | `anthropic/claude-3.5-sonnet`      | `llama3.1`     |
+| **Verifier** (Diffs, builds, tests)   | `gpt-4o`      | `claude-3-5-sonnet-20241022` | `minimaxai/minimax-m3.1-flash` | `anthropic/claude-3.5-sonnet`      | `llama3.1`     |
+| **Explainer** (PRs & dev reports)     | `gpt-4o-mini` | `claude-3-5-haiku-20241022`  | `minimaxai/minimax-m3.1-flash` | `meta-llama/llama-3.1-8b-instruct` | `llama3.1`     |
 
 ---
 
@@ -86,7 +86,7 @@ VulnFlow assigns specialized models to agent roles based on task complexity, lat
 export VULNFLOW_LLM_PROVIDER=nvidia
 
 # Global model override
-export VULNFLOW_LLM_MODEL=meta/llama-3.1-70b-instruct
+export VULNFLOW_LLM_MODEL=minimaxai/minimax-m3.1-flash
 
 # Security & Validation
 export VULNFLOW_LLM_REDACTION_GUARD=true
@@ -98,27 +98,36 @@ export VULNFLOW_LLM_RECORDER_MODE=LIVE  # LIVE | RECORD | REPLAY | AUTO
 export VULNFLOW_LLM_RECORD_DIR=evals/recorded_llm
 ```
 
-### Provider Credentials & Endpoints
+### Provider Credentials, Endpoints & Models
+
+All models are completely configurable in `.env` using provider-specific model variables (or globally via `VULNFLOW_LLM_MODEL`):
 
 ```bash
 # Nvidia NIM
 export NVIDIA_API_KEY=nvapi-...
+export NVIDIA_MODEL=minimaxai/minimax-m3.1-flash
 export NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
 
-# OpenRouter
+# OpenRouter (Unified access to 100+ models)
 export OPENROUTER_API_KEY=sk-or-v1-...
+export OPENROUTER_MODEL=meta-llama/llama-3.3-70b-instruct
+# Alternative OpenRouter models: deepseek/deepseek-chat, google/gemini-2.0-flash-001, anthropic/claude-3.5-sonnet
 export OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 
 # Anthropic
 export ANTHROPIC_API_KEY=sk-ant-...
+export ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
 
 # OpenAI
 export OPENAI_API_KEY=sk-...
+export OPENAI_MODEL=gpt-4o
 
 # Ollama
+export OLLAMA_MODEL=llama3.1
 export OLLAMA_BASE_URL=http://localhost:11434
 
 # AWS Bedrock
+export BEDROCK_MODEL=anthropic.claude-3-5-sonnet-20241022-v2:0
 export AWS_ACCESS_KEY_ID=AKIA...
 export AWS_SECRET_ACCESS_KEY=...
 export AWS_REGION=us-east-1
@@ -136,7 +145,7 @@ export VULNFLOW_ROLE_PROVIDER_TRIAGE=ollama
 export VULNFLOW_ROLE_MODEL_TRIAGE=llama3.1
 
 export VULNFLOW_ROLE_PROVIDER_VERIFIER=nvidia
-export VULNFLOW_ROLE_MODEL_VERIFIER=meta/llama-3.1-70b-instruct
+export VULNFLOW_ROLE_MODEL_VERIFIER=minimaxai/minimax-m3.1-flash
 ```
 
 ---
@@ -230,17 +239,17 @@ assert response.cached is True
 
 ## 7. Package Map
 
-| File | Responsibility |
-|---|---|
-| `src/vulnflow/llm/base.py` | `LLMClient` abstract interface, `LLMMessage`, `LLMResponse`, `LLMUsage`, exception classes |
-| `src/vulnflow/llm/factory.py` | Role-to-model resolver, provider factory, and middleware orchestrator |
-| `src/vulnflow/llm/guard.py` | Secret redaction middleware and untrusted prompt injection boundary wrapper |
-| `src/vulnflow/llm/structured.py` | Markdown JSON extraction, Pydantic/dataclass schema validation, bounded correction retry loop |
-| `src/vulnflow/llm/recorder.py` | Fixture hashing, persistence, and deterministic offline mock/replay engine |
-| `src/vulnflow/llm/embeddings.py` | Text embeddings interface, OpenAI, Ollama, and offline hash embedding providers |
-| `src/vulnflow/llm/providers/openai.py` | OpenAI chat completions adapter |
-| `src/vulnflow/llm/providers/anthropic.py` | Anthropic Messages API adapter |
-| `src/vulnflow/llm/providers/nvidia.py` | Nvidia NIM OpenAI-compatible adapter |
-| `src/vulnflow/llm/providers/openrouter.py` | OpenRouter multi-model adapter |
-| `src/vulnflow/llm/providers/bedrock.py` | AWS Bedrock Converse API adapter |
-| `src/vulnflow/llm/providers/ollama.py` | Ollama local daemon adapter |
+| File                                       | Responsibility                                                                                |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `src/vulnflow/llm/base.py`                 | `LLMClient` abstract interface, `LLMMessage`, `LLMResponse`, `LLMUsage`, exception classes    |
+| `src/vulnflow/llm/factory.py`              | Role-to-model resolver, provider factory, and middleware orchestrator                         |
+| `src/vulnflow/llm/guard.py`                | Secret redaction middleware and untrusted prompt injection boundary wrapper                   |
+| `src/vulnflow/llm/structured.py`           | Markdown JSON extraction, Pydantic/dataclass schema validation, bounded correction retry loop |
+| `src/vulnflow/llm/recorder.py`             | Fixture hashing, persistence, and deterministic offline mock/replay engine                    |
+| `src/vulnflow/llm/embeddings.py`           | Text embeddings interface, OpenAI, Ollama, and offline hash embedding providers               |
+| `src/vulnflow/llm/providers/openai.py`     | OpenAI chat completions adapter                                                               |
+| `src/vulnflow/llm/providers/anthropic.py`  | Anthropic Messages API adapter                                                                |
+| `src/vulnflow/llm/providers/nvidia.py`     | Nvidia NIM OpenAI-compatible adapter                                                          |
+| `src/vulnflow/llm/providers/openrouter.py` | OpenRouter multi-model adapter                                                                |
+| `src/vulnflow/llm/providers/bedrock.py`    | AWS Bedrock Converse API adapter                                                              |
+| `src/vulnflow/llm/providers/ollama.py`     | Ollama local daemon adapter                                                                   |

@@ -9,6 +9,7 @@ import argparse
 import json
 import logging
 import sys
+import os
 from pathlib import Path
 
 # Ensure src root is on sys.path when invoked directly
@@ -16,8 +17,11 @@ src_dir = str(Path(__file__).resolve().parent.parent)
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
+from vulnflow.core import dotenv
 from vulnflow.agents.planner import default_planner_agent
 from vulnflow.contracts.state import VulnFlowState
+from vulnflow.core import console
+from vulnflow.observability.langsmith_tracer import langsmith_tracer
 from vulnflow.orchestrator.graph import run_workflow
 from vulnflow.reporting.json_report import write_json_report
 from vulnflow.reporting.markdown import write_markdown_report
@@ -28,104 +32,114 @@ logger = logging.getLogger("vulnflow.cli")
 
 
 def _print_execution_summary(result: VulnFlowState) -> None:
-    """Print structured, developer-friendly execution report to stdout."""
-    width = 68
-    print("\n" + "=" * width)
-    print(f"🛡️  VulnFlow Execution Summary [Run: {result.run_id}]")
-    print("=" * width)
-    print(f"Status:       {result.terminal_status.upper()}")
-    print(f"Exit Code:    {result.exit_code}")
-    print(f"Findings:     {len(result.findings)} discovered ({len(result.deduped_findings)} deduped)")
-    print(f"Root Causes:  {len(result.root_cause_groups)} group(s)")
-    pending_cnt = len(result.pending_approval_plans) if getattr(result, "pending_approval_plans", None) else len([p for p in result.plans if p.requires_approval and p not in result.approved_plans])
-    print(f"Plans:        {len(result.plans)} generated ({len(result.approved_plans)} approved, {pending_cnt} pending review)")
-    print(f"Patches:      {len(result.patches)} applied")
-    print(f"Pull Requests:{len(result.pull_requests)} opened")
+    """Print structured, developer-friendly, colorful execution report to stdout."""
+    width = 72
+    print("\n" + console.box_header(f"🛡️  VulnFlow Execution Summary  [Run: {result.run_id}]", width=width))
 
-    # Pending approval warning
+    pending_cnt = (
+        len(result.pending_approval_plans)
+        if getattr(result, "pending_approval_plans", None)
+        else len([p for p in result.plans if p.requires_approval and p not in result.approved_plans])
+    )
+    status_badge = console.status_badge(result.terminal_status, result.exit_code)
+
+    print(f"  {console.gray('Execution Status:')} {status_badge}")
+    print(f"  {console.gray('Target Repo:')}      {console.bold(console.white(result.repo_path))}")
+    print(f"  {console.gray('Discovered:')}       {console.bold(str(len(result.findings)))} raw findings ({console.green(str(len(result.deduped_findings)))} unique deduped)")
+    print(f"  {console.gray('Root Causes:')}      {console.cyan(console.bold(str(len(result.root_cause_groups))))} dependency cluster(s)")
+    print(f"  {console.gray('Remediations:')}     {console.yellow(console.bold(str(len(result.plans))))} plans generated ({console.green(str(len(result.approved_plans)))} approved, {console.yellow(str(pending_cnt))} pending review)")
+    print(f"  {console.gray('Patches Applied:')}  {console.cyan(console.bold(str(len(result.patches))))}")
+    print(f"  {console.gray('Pull Requests:')}    {console.green(console.bold(str(len(result.pull_requests))))} opened")
+
+    # 1. Pending approval warning
     if result.terminal_status == "pending_approval" or (getattr(result, "pending_approval_plans", None) and not result.approved_plans):
         pending = result.pending_approval_plans or [p for p in result.plans if p.requires_approval and p not in result.approved_plans]
-        print("\n" + "-" * width)
-        print("⚠️  Human Security Approval Required (Exit Code: 10):")
-        print(f"  • Status:      {len(pending)} plan(s) paused awaiting human authorization.")
-        print(f"  • Reason:      Review-tier remediations (secrets, PII, or unvetted dependencies).")
-        print(f"  • Safeguard:   PR creation withheld to prevent merging unvetted changes.")
-        print("\n  👉 Next Steps to Approve & Resume:")
+        print(console.section_divider("⚡ Human Security Approval Required (Exit Code: 10)", width=width, color_fn=console.yellow))
+        print(f"  {console.yellow('• Status:')}      {console.bold(str(len(pending)))} plan(s) paused awaiting human authorization.")
+        print(f"  {console.yellow('• Reason:')}      Review-tier remediations (secrets, PII, or unvetted dependencies).")
+        print(f"  {console.yellow('• Safeguard:')}   PR creation withheld to prevent merging unvetted changes.")
+        print(f"\n  {console.bold(console.yellow('👉 Action Required - Next Steps to Approve & Resume:'))}")
         for idx, p in enumerate(pending, 1):
             target = p.target_package or p.root_cause_id
-            print(f"    [{idx}] Plan ID: {p.id} ({target})")
-            print(f"        Command: python3 src/vulnflow/cli.py approve --plan-id {p.id} --reviewer \"<your-email>\" --resume --repo {result.repo_path}")
-    # Blocking reason and exception guidance if run halted
+            print(f"    [{console.bold(str(idx))}] Plan ID: {console.cyan(p.id)} ({console.bold(target)})")
+            print(f"        {console.dim('CLI Command:')} {console.green(f'vulnflow approve --plan-id {p.id} --resume --repo {result.repo_path}')}")
+            print(f"        {console.dim('Web UI:')}     Open {console.cyan('http://localhost:8000/#/approval')} to authorize with 1 click")
+    # 2. Blocking reason and exception guidance if run halted
     elif result.terminal_status == "blocked_policy" or result.blocking_reason or result.exception_ticket:
         t_id = result.exception_ticket.get("ticket_id", "SEC-UNKNOWN") if result.exception_ticket else "SEC-ESCALATED"
         t_url = result.exception_ticket.get("ticket_url", "#") if result.exception_ticket else "#"
-        print("\n" + "-" * width)
-        print("🛑 Execution Blocked & Exception Escalated:")
-        print(f"  • Reason:      {result.blocking_reason or 'Policy safety gate blocked automated PR opening.'}")
-        print(f"  • Ticket:      {t_id} ({t_url})")
-        print(f"  • Safeguard:   PR creation halted to protect codebase integrity.")
-        print(f"  • Next Action: Review failing tests or request approval via security ticket.")
+        print(console.section_divider("✖ Policy Safety Gate Blocked Execution (Exit Code: 20)", width=width, color_fn=console.red))
+        print(f"  {console.red('• Blocking Reason:')} {result.blocking_reason or 'Policy safety gate blocked automated PR opening.'}")
+        print(f"  {console.red('• Ticket:')}          {console.bold(t_id)} ({t_url})")
+        print(f"  {console.red('• Safeguard:')}       PR creation halted to protect codebase integrity.")
+        print(f"  {console.red('• Next Action:')}     Review failing tests or request approval via security ticket.")
 
-    # 1. Findings Breakdown
+    # 3. Findings Breakdown
     if result.deduped_findings:
-        print("\n" + "-" * width)
-        print("📌 Discovered Vulnerabilities:")
+        print(console.section_divider("📌 Discovered Vulnerabilities", width=width))
         for idx, f in enumerate(result.deduped_findings, 1):
             cves = ", ".join(f.cve) if f.cve else "N/A"
             sev = f.severity.value.upper() if hasattr(f.severity, "value") else str(f.severity).upper()
             fixes = ", ".join(f.fix_versions) if f.fix_versions else "None"
-            print(f"  [{idx}] {f.package}@{f.version} [{sev}] | CVE: {cves} | Fix: {fixes}")
+            sev_pill = console.severity_badge(sev)
+            print(f"  [{console.bold(str(idx))}] {console.bold(f.package)}@{console.dim(f.version)} {sev_pill} | {console.gray('CVE:')} {console.yellow(cves)} | {console.gray('Fix:')} {console.green(fixes)}")
 
-    # 2. AI Remediation Plans
+    # 4. AI Remediation Plans
     if result.plans:
-        print("\n" + "-" * width)
-        print("🧠 AI Remediation Plan(s) & Rationale:")
+        print(console.section_divider("🧠 AI Remediation Plans & Strategy", width=width))
         for idx, plan in enumerate(result.plans, 1):
             act = plan.action.value.upper() if hasattr(plan.action, "value") else str(plan.action).upper()
             tier = plan.risk_tier.value.upper() if hasattr(plan.risk_tier, "value") else str(plan.risk_tier).upper()
             pol = plan.policy_result.status.upper() if plan.policy_result else "APPROVED"
-            print(f"  Plan #{idx}: [{act}] {plan.target_package or plan.root_cause_id}")
-            print(f"    • Plan ID:        {plan.id}")
-            print(f"    • Target Version: {plan.target_version or 'N/A'}")
-            print(f"    • Risk Tier:      {tier} (Requires Approval: {plan.requires_approval})")
-            print(f"    • Policy Check:   {pol}")
-            print(f"    • AI Rationale:")
+
+            pol_str = console.green(pol) if pol == "APPROVED" else console.red(pol)
+            tier_str = console.green(tier) if tier == "AUTO" else console.yellow(tier)
+            act_badge = console.action_badge(act)
+
+            print(f"  {console.bold(f'Plan #{idx}:')} [{act_badge}] {console.bold(console.white(plan.target_package or plan.root_cause_id))}")
+            print(f"    • {console.gray('Plan ID:')}        {console.cyan(plan.id)}")
+            print(f"    • {console.gray('Target Version:')} {console.green(plan.target_version or 'N/A')}")
+            print(f"    • {console.gray('Risk Tier:')}      {tier_str} (Requires Approval: {plan.requires_approval})")
+            print(f"    • {console.gray('Policy Check:')}   {pol_str}")
+            print(f"    • {console.gray('AI Guidance:')}")
             for line in plan.rationale.strip().split("\n"):
-                print(f"        {line}")
+                print(f"        {console.dim(line)}")
 
-    # 3. Pull Requests Opened
+    # 5. Pull Requests Opened
     if result.pull_requests:
-        print("\n" + "-" * width)
-        print("🚀 Opened Pull Request(s):")
+        print(console.section_divider("🚀 Opened Pull Request(s)", width=width, color_fn=console.green))
         for pr in result.pull_requests:
-            print(f"  • Title:  {pr.get('title')}")
-            print(f"  • Branch: {pr.get('branch')}")
-            print(f"  • URL:    {pr.get('pr_url')}")
-            body = pr.get("body")
-            if body:
-                print(f"  • PR Description Preview:")
-                for line in body.split("\n")[:18]:
-                    print(f"      {line}")
-                if len(body.split("\n")) > 18:
-                    print(f"      ... [Full Markdown description submitted with PR]")
+            title = pr.get("title", "Pull Request")
+            branch = pr.get("branch", "unknown")
+            url = pr.get("pr_url", "#")
+            print(f"  • {console.bold(title)}")
+            print(f"    {console.gray('Branch:')} {console.cyan(branch)}")
+            print(f"    {console.gray('PR URL:')} {console.blue(console.underline(url))}")
 
-    # 4. Verification
+    # 6. Verification
     if result.verification_results:
         ver = result.verification_results[0]
-        clean = "✅ RESOLVED (0 remaining vulnerabilities)" if ver.get("rescan_clean") else "⚠️ RESIDUAL FINDINGS REMAIN"
-        tests = "✅ PASSED" if ver.get("tests_passed") else "❌ FAILED"
-        print("\n" + "-" * width)
-        print("🧪 Verification & Build Evidence:")
-        print(f"  • Sandbox Test Suite:  {tests}")
-        print(f"  • Rescan Verification: {clean}")
+        clean = console.green("✔ RESOLVED (0 remaining vulnerabilities)") if ver.get("rescan_clean") else console.yellow("⚠ RESIDUAL FINDINGS REMAIN")
+        tests = console.green("✔ PASSED") if ver.get("tests_passed") else console.red("✖ FAILED")
+        print(console.section_divider("🧪 Verification & Build Evidence", width=width))
+        print(f"  • {console.gray('Sandbox Test Suite:')}  {tests}")
+        print(f"  • {console.gray('Rescan Verification:')} {clean}")
 
-    # 5. Observability & Audit Trail
+    # 7. LangSmith Distributed Tracing & Observability
+    print(console.section_divider("🌐 Distributed Tracing & Observability", width=width))
+    if langsmith_tracer.is_enabled():
+        trace_url = langsmith_tracer.get_run_url(result.run_id)
+        print(f"  • {console.gray('LangSmith Engine:')}  {console.green(console.bold('● CONNECTED'))} [Project: {console.cyan(langsmith_tracer.project)}]")
+        if trace_url:
+            print(f"  • {console.gray('Trace Deep-Link:')}   {console.blue(console.underline(trace_url))}")
+    else:
+        print(f"  • {console.gray('LangSmith Engine:')}  {console.dim('○ INACTIVE (Local audit logging active)')}")
+        print(f"  • {console.gray('Enable Tracing:')}    {console.dim('export LANGSMITH_API_KEY=\"<your-api-key>\" to stream traces live')}")
+
     if result.audit_events:
-        print("\n" + "-" * width)
         audit_file = f".vulnflow/audit/audit_{result.run_id}.jsonl"
-        print(f"📋 Observability & Audit Trail ({len(result.audit_events)} actions traced):")
-        print(f"  • Audit Log File: {audit_file}")
-        print("  • Action Sequence:")
+        print(f"  • {console.gray('Local Audit Log:')}   {console.cyan(audit_file)} ({console.bold(str(len(result.audit_events)))} events logged)")
+        print(f"  • {console.gray('Action Sequence:')}")
         for idx, ev in enumerate(result.audit_events, 1):
             ev_name = ev.get("event_type", "UNKNOWN")
             actor = ev.get("actor", "system")
@@ -143,9 +157,42 @@ def _print_execution_summary(result: VulnFlowState) -> None:
                 summary_info = f"({payload.get('pr_url')})"
             elif "rescan_clean" in payload:
                 summary_info = "(clean rescan)" if payload["rescan_clean"] else "(residual findings)"
-            print(f"    [{idx:02d}] {ev_name:<25} | {actor:<14} {summary_info}")
+            print(f"    [{console.cyan(f'{idx:02d}')}] {console.bold(ev_name):<30} | {console.gray(actor):<16} {console.dim(summary_info)}")
 
-    print("=" * width + "\n")
+    print(f"\n{console.cyan('─' * width)}\n")
+
+
+def _detect_scanner_format(report_path: str) -> str:
+    """Sniff report file content or filename to determine scanner format automatically."""
+    p = Path(report_path)
+    p_lower = str(report_path).lower()
+    if "gitleaks" in p_lower:
+        return "gitleaks"
+    if p_lower.endswith(".sarif") or "sarif" in p_lower:
+        return "sarif"
+    if "grype" in p_lower:
+        return "grype"
+    if "snyk" in p_lower:
+        return "snyk"
+    if "osv" in p_lower:
+        return "osv"
+    if p.exists() and p.is_file():
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                snippet = f.read(3000)
+            if '"runs"' in snippet and '"tool"' in snippet:
+                return "sarif"
+            if '"Secret"' in snippet or '"RuleID"' in snippet or '"Fingerprint"' in snippet:
+                return "gitleaks"
+            if '"matches"' in snippet and '"artifact"' in snippet:
+                return "grype"
+            if '"SchemaVersion"' in snippet or '"Results"' in snippet:
+                return "trivy"
+            if '"vulnerabilities"' in snippet and "snyk" in snippet.lower():
+                return "snyk"
+        except Exception:
+            pass
+    return "trivy"
 
 
 def cmd_analyze(args: argparse.Namespace) -> int:
@@ -155,27 +202,53 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     else:
         default_planner_agent.enable_llm = True
 
+    # Configure LangSmith overrides if specified
+    if getattr(args, "langsmith_project", None):
+        os.environ["LANGCHAIN_PROJECT"] = args.langsmith_project
+        langsmith_tracer.project = args.langsmith_project
+    if getattr(args, "langsmith", False):
+        os.environ["LANGCHAIN_TRACING_V2"] = "true"
+        langsmith_tracer.init_from_env()
+    elif getattr(args, "no_langsmith", False):
+        os.environ["LANGCHAIN_TRACING_V2"] = "false"
+        langsmith_tracer.enabled = False
+
     report_path = args.report
-    scanner = args.scanner
+    scanner = getattr(args, "scanner", None)
+
+    # If report was provided without an explicit scanner, auto-detect the scanner format from file
+    if report_path and not scanner:
+        scanner = _detect_scanner_format(report_path)
+        logger.info("Auto-detected scanner format '%s' from report: %s", scanner, report_path)
 
     # Auto-detect scanner report if not explicitly provided
     if not report_path:
         repo_p = Path(args.repo)
         candidates = [
-            (repo_p / "gitleaks.json", "gitleaks"),
+            (repo_p / "scan-results.json", None),
             (repo_p / "trivy.json", "trivy"),
             (repo_p / "trivy-results.json", "trivy"),
+            (repo_p / "trivy-report.json", "trivy"),
+            (repo_p / "results.sarif", "sarif"),
+            (repo_p / "report.sarif", "sarif"),
+            (repo_p / "gitleaks.json", "gitleaks"),
             (repo_p / "grype.json", "grype"),
             (repo_p / "snyk.json", "snyk"),
             (Path("data/fixtures/sample_gitleaks_report.json"), "gitleaks"),
             (Path("vulnflow/data/fixtures/sample_gitleaks_report.json"), "gitleaks"),
+            (Path(__file__).resolve().parent.parent.parent / "data/fixtures/sample_gitleaks_report.json", "gitleaks"),
         ]
         for c_path, c_scanner in candidates:
             if c_path.exists():
                 report_path = str(c_path)
-                scanner = c_scanner
+                if not scanner:
+                    scanner = c_scanner or _detect_scanner_format(report_path)
                 logger.info("Auto-detected security report at %s (scanner: %s)", report_path, scanner)
                 break
+
+    # If still no scanner, default to trivy
+    if not scanner:
+        scanner = "trivy"
 
     state = VulnFlowState(
         repo_path=args.repo,
@@ -207,6 +280,10 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     else:
         write_markdown_report(result, out_path)
         print(f"📄 Executive Markdown report written to: {out_path}\n")
+
+    # Ensure all LangSmith traces are flushed before exit
+    if langsmith_tracer.is_enabled():
+        langsmith_tracer.flush(timeout=4.0)
 
     return result.exit_code
 
@@ -391,10 +468,12 @@ def cmd_serve(args: argparse.Namespace) -> int:
     dist_dir = ui_dir / "dist"
 
     # Build UI bundle if requested or if missing in production mode
+    use_shell = sys.platform == "win32"
+    npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
     if (build_ui or (not dev_mode and not (dist_dir / "index.html").exists())) and (ui_dir / "package.json").exists():
         print("\n📦 Building frontend Web Dashboard bundle (Vite + React)...")
         try:
-            subprocess.run(["npm", "run", "build"], cwd=str(ui_dir), check=True)
+            subprocess.run([npm_cmd, "run", "build"], cwd=str(ui_dir), check=True, shell=use_shell)
             print("✅ Frontend dashboard built successfully.\n")
         except Exception as exc:
             logger.warning("Could not build frontend bundle: %s", exc)
@@ -405,7 +484,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         env = os.environ.copy()
         env["VITE_API_BASE_URL"] = f"http://localhost:{port}"
         try:
-            vite_proc = subprocess.Popen(["npm", "run", "dev"], cwd=str(ui_dir), env=env)
+            vite_proc = subprocess.Popen([npm_cmd, "run", "dev"], cwd=str(ui_dir), env=env, shell=use_shell)
         except Exception as exc:
             logger.warning("Could not start Vite dev process: %s", exc)
 
@@ -438,8 +517,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
             import uvicorn
             uvicorn.run("api.main:app", host=host, port=port, reload=reload_backend)
         except ImportError:
-            logger.error("uvicorn is not installed. Run: pip install 'uvicorn[standard]' or pip install 'vulnflow[all]'")
-            return 1
+            print("ℹ️  Running on built-in multi-threaded HTTP server (zero pip packages required).")
+            print("   Tip: For optional high-concurrency ASGI, install uvicorn: pip install uvicorn\n")
+            from vulnflow.api.builtin_server import run_builtin_server
+            run_builtin_server(host=host, port=port, dist_dir=dist_dir)
     except KeyboardInterrupt:
         print("\n🛑 Shutting down VulnFlow server...")
     finally:
@@ -454,22 +535,72 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+CLI_EPILOG = """
+Commands:
+  scan, analyze      Scan repository, deduplicate findings, and formulate/apply fixes
+  report             Generate vulnerability assessment report only (read-only, no code changes)
+  serve              Start unified Web Dashboard & REST API on http://localhost:8000
+  approve            Authorize or reject review-tier remediation plan
+  fix                Apply patch for an approved plan
+  verify             Verify that a branch resolves target findings
+  audit              Inspect chronological audit trail of a run
+  watch-expiry       Inspect and alert on expiring certificates, tokens, or waivers
+
+Attributes & Options for scan / analyze / report:
+  --repo PATH               Target repository directory path (default: .)
+  --mode {report,pr,dry-run} Execution mode (default: pr for scan, report for report)
+                            • report:  read-only assessment, no code changes
+                            • pr:      fix, test in sandbox, and open GitHub PR
+                            • dry-run: local patch & test without remote PR
+  --report PATH             Path to scanner JSON or SARIF report (auto-detected if omitted)
+  --scanner {trivy,grype,snyk,gitleaks}
+                            Scanner engine format (default: trivy)
+  --ecosystem {npm,maven,pip}
+                            Primary package ecosystem (default: npm)
+  --output, -o PATH         Destination file path to save report (e.g. report.md, report.json)
+  --format {markdown,json}  Report format to write to disk (default: markdown)
+  --auto-approve            Auto-approve review-tier plans without waiting for human sign-off
+  --no-llm                  Skip remote LLM calls and use fast deterministic rule planner
+  --langsmith               Enable LangSmith distributed tracing
+  --no-langsmith            Explicitly disable LangSmith distributed tracing
+  --langsmith-project NAME  LangSmith project name (default: vulnflow)
+
+Web Dashboard & Server (serve):
+  --port PORT               Port to listen on (default: 8000)
+  --host HOST               Binding host address (default: 0.0.0.0)
+  --dev                     Launch Vite development server with hot module reloading on :5173
+  --build-ui                Rebuild frontend React bundle before starting
+  --open                    Automatically open browser to Dashboard URL
+
+Governance & Approvals (approve):
+  --plan-id ID              Remediation plan ID (required)
+  --resume                  Automatically resume workflow execution and create PR upon approval
+  --reviewer EMAIL/NAME     Reviewer identifier or email (default: security-lead)
+  --reason TEXT             Explanation or justification for decision
+  --reject                  Reject the remediation plan instead of approving
+
+Quick Recipes:
+  vulnflow scan --repo fake-vuln-repo --mode report
+  vulnflow scan --repo fake-vuln-repo --mode pr
+  vulnflow scan --repo fake-vuln-repo --mode pr --auto-approve
+  vulnflow report --repo fake-vuln-repo --format json -o audit.json
+  vulnflow approve --plan-id PLAN-SEC-FND-e750 --resume --repo fake-vuln-repo
+  vulnflow serve
+"""
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="vulnflow",
         description="🛡️ VulnFlow AI - Autonomous Vulnerability Remediation & Security Fabric",
+        epilog=CLI_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
     # Friendly quick start when invoked with no arguments
     raw_args = argv if argv is not None else sys.argv[1:]
     if not raw_args:
         parser.print_help()
-        print("\nQuick Start Guide:")
-        print("  vulnflow serve                 # Start unified Web Dashboard & API on http://localhost:8000")
-        print("  vulnflow serve --dev           # Start development mode with Vite hot-reload on :5173")
-        print("  vulnflow scan --repo <path>    # Scan and auto-remediate a repository")
-        print("  vulnflow report --repo <path>  # Generate assessment report without making code changes")
-        print("  vulnflow approve --plan-id <id> --resume --repo <path>  # Authorize review-tier plan\n")
         return 0
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -488,33 +619,39 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_scan = subparsers.add_parser("scan", help="Scan repository, deduplicate findings, and generate remediation plans")
     p_scan.add_argument("--repo", default=".", help="Target repository directory path")
     p_scan.add_argument("--report", help="Path to scanner JSON or SARIF report (auto-detected if omitted)")
-    p_scan.add_argument("--scanner", default="trivy", help="Security scanner name (trivy, grype, snyk, gitleaks)")
-    p_scan.add_argument("--mode", choices=["report", "pr", "dry-run"], default="pr", help="Execution mode")
+    p_scan.add_argument("--scanner", default=None, help="Security scanner name (auto-detected if --report is provided; defaults to trivy)")
+    p_scan.add_argument("--mode", choices=["report", "pr", "dry-run"], default="pr", help="Execution mode (default: pr)")
     p_scan.add_argument("--ecosystem", default="npm", help="Primary package ecosystem (npm, maven)")
     p_scan.add_argument("--output", "-o", help="File path to save the generated report")
     p_scan.add_argument("--format", choices=["markdown", "json"], default="markdown", help="Report format")
     p_scan.add_argument("--no-llm", action="store_true", help="Skip remote LLM calls and use fast deterministic planner")
     p_scan.add_argument("--auto-approve", action="store_true", help="Auto-approve review-tier plans without waiting for human sign-off")
+    p_scan.add_argument("--langsmith", action="store_true", help="Enable LangSmith distributed tracing")
+    p_scan.add_argument("--no-langsmith", action="store_true", help="Explicitly disable LangSmith tracing")
+    p_scan.add_argument("--langsmith-project", help="LangSmith project name (default: vulnflow)")
     p_scan.set_defaults(func=cmd_analyze)
 
     # analyze
     p_analyze = subparsers.add_parser("analyze", help="Ingest a report, group, plan, and remediate")
     p_analyze.add_argument("--repo", default=".", help="Target repository directory path")
     p_analyze.add_argument("--report", help="Path to scanner JSON or SARIF report (auto-detected if omitted)")
-    p_analyze.add_argument("--scanner", default="trivy", help="Security scanner name (trivy, grype, snyk, gitleaks)")
-    p_analyze.add_argument("--mode", choices=["report", "pr", "dry-run"], default="pr", help="Execution mode")
+    p_analyze.add_argument("--scanner", default=None, help="Security scanner name (auto-detected if --report is provided; defaults to trivy)")
+    p_analyze.add_argument("--mode", choices=["report", "pr", "dry-run"], default="pr", help="Execution mode (default: pr)")
     p_analyze.add_argument("--ecosystem", default="npm", help="Primary package ecosystem (npm, maven)")
     p_analyze.add_argument("--output", "-o", help="File path to save the generated report (e.g., report.md or report.json)")
     p_analyze.add_argument("--format", choices=["markdown", "json"], default="markdown", help="Report format")
     p_analyze.add_argument("--no-llm", action="store_true", help="Skip remote LLM calls and use fast deterministic planner")
     p_analyze.add_argument("--auto-approve", action="store_true", help="Auto-approve review-tier plans without waiting for human sign-off")
+    p_analyze.add_argument("--langsmith", action="store_true", help="Enable LangSmith distributed tracing")
+    p_analyze.add_argument("--no-langsmith", action="store_true", help="Explicitly disable LangSmith tracing")
+    p_analyze.add_argument("--langsmith-project", help="LangSmith project name (default: vulnflow)")
     p_analyze.set_defaults(func=cmd_analyze)
 
     # report
     p_report = subparsers.add_parser("report", help="Analyze and output report only without code changes")
     p_report.add_argument("--repo", default=".", help="Target repository directory path")
     p_report.add_argument("--report", help="Path to scanner JSON or SARIF report")
-    p_report.add_argument("--scanner", default="trivy", help="Security scanner name")
+    p_report.add_argument("--scanner", default=None, help="Security scanner name (auto-detected if --report is provided; defaults to trivy)")
     p_report.add_argument("--ecosystem", default="npm", help="Package ecosystem")
     p_report.add_argument("--output", "-o", help="File path to save the generated report")
     p_report.add_argument("--format", choices=["markdown", "json"], default="markdown", help="Report format")

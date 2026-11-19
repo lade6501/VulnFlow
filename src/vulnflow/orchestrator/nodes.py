@@ -56,7 +56,28 @@ def ingest_node(state: VulnFlowState) -> VulnFlowState:
         findings: List[Finding] = []
 
         if state.report_path and Path(state.report_path).exists():
-            s_name = (state.scanner or "trivy").lower()
+            s_name = (state.scanner or "").lower()
+            rep_lower = str(state.report_path).lower()
+
+            # Automatic content inspection if scanner was omitted or default
+            if not s_name or s_name == "trivy":
+                if "gitleaks" in rep_lower or "secret" in rep_lower:
+                    s_name = "gitleaks"
+                elif rep_lower.endswith(".sarif") or "sarif" in rep_lower:
+                    s_name = "sarif"
+                else:
+                    try:
+                        with open(state.report_path, "r", encoding="utf-8") as _f:
+                            _snip = _f.read(3000)
+                        if '"Secret"' in _snip or '"RuleID"' in _snip or '"Fingerprint"' in _snip:
+                            s_name = "gitleaks"
+                        elif '"runs"' in _snip and '"tool"' in _snip:
+                            s_name = "sarif"
+                        elif '"matches"' in _snip and '"artifact"' in _snip:
+                            s_name = "grype"
+                    except Exception:
+                        pass
+
             if "sarif" in s_name or state.report_path.endswith(".sarif"):
                 adapter = SARIFAdapter()
             elif "grype" in s_name:

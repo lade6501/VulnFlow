@@ -13,6 +13,9 @@
 
 set -e
 
+# Preserve original working directory for CLI subcommands
+ORIGINAL_PWD="$(pwd)"
+
 # Resolve script directory (handles symlinks and executions from any working directory)
 SOURCE="${BASH_SOURCE[0]}"
 while [ -h "$SOURCE" ]; do
@@ -27,7 +30,16 @@ if [ -d "$VULNFLOW_ROOT/vulnflow" ]; then
   VULNFLOW_ROOT="$VULNFLOW_ROOT/vulnflow"
 fi
 
-cd "$VULNFLOW_ROOT"
+# Automatically source .env variables if present
+if [ -f "$VULNFLOW_ROOT/.env" ]; then
+  set -a
+  source "$VULNFLOW_ROOT/.env" 2>/dev/null || true
+  set +a
+elif [ -f "$VULNFLOW_ROOT/../.env" ]; then
+  set -a
+  source "$VULNFLOW_ROOT/../.env" 2>/dev/null || true
+  set +a
+fi
 
 # Ensure src/ and repo root are on PYTHONPATH
 export PYTHONPATH="$VULNFLOW_ROOT/src:$VULNFLOW_ROOT:$PYTHONPATH"
@@ -46,11 +58,17 @@ print_banner() {
   echo -e "${BOLD}${CYAN}====================================================================${RESET}"
 }
 
+# If invoked with no arguments, display quick start guide
+if [ $# -eq 0 ]; then
+  cd "$ORIGINAL_PWD"
+  exec python3 "$VULNFLOW_ROOT/src/vulnflow/cli.py"
+fi
+
 # Subcommand routing
-ACTION="${1:-serve}"
+ACTION="$1"
 
 case "$ACTION" in
-  serve|"")
+  serve)
     print_banner
     # Auto-build UI if missing
     if [ ! -f "$VULNFLOW_ROOT/ui/dist/index.html" ]; then
@@ -91,25 +109,38 @@ case "$ACTION" in
     ;;
 
   scan|analyze|report|fix|verify|approve|audit|watch-expiry)
-    # Pass directly to VulnFlow CLI
+    # Pass directly to VulnFlow CLI from original caller working directory
+    cd "$ORIGINAL_PWD"
     exec python3 "$VULNFLOW_ROOT/src/vulnflow/cli.py" "$@"
     ;;
 
-  help|--help|-h)
+  install)
     print_banner
-    echo -e "Usage: ./run.sh [command] [options]\n"
-    echo -e "Available Commands:"
-    echo -e "  ${BOLD}serve${RESET}            Start unified Web Dashboard & API on http://localhost:8000 (Default)"
-    echo -e "  ${BOLD}dev${RESET}              Start in Dev mode with Vite hot-reloading on :5173"
-    echo -e "  ${BOLD}scan${RESET}             Scan repository and auto-plan fixes (e.g. ./run.sh scan --repo ../fake-vuln-repo)"
-    echo -e "  ${BOLD}report${RESET}           Generate vulnerability report without modifying code"
-    echo -e "  ${BOLD}approve${RESET}          Authorize review-tier plan (e.g. ./run.sh approve --plan-id <id> --resume)"
-    echo -e "  ${BOLD}docker${RESET}           Build & run containerized VulnFlow on http://localhost:8000"
-    echo -e "  ${BOLD}build${RESET}            Build production UI assets in ui/dist/"
-    echo -e "  ${BOLD}audit${RESET}            View chronological audit log of remediation runs\n"
+    INSTALL_DIR="$HOME/.local/bin"
+    mkdir -p "$INSTALL_DIR"
+    ln -sf "$VULNFLOW_ROOT/run.sh" "$INSTALL_DIR/vulnflow"
+    chmod +x "$VULNFLOW_ROOT/run.sh"
+    echo -e "${GREEN}✅ Successfully installed VulnFlow CLI link to: $INSTALL_DIR/vulnflow${RESET}\n"
+    if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
+      echo -e "${YELLOW}Notice: $INSTALL_DIR is not yet in your current PATH.${RESET}"
+      echo -e "Add this to your ~/.zshrc or ~/.bashrc:"
+      echo -e "  export PATH=\"\$HOME/.local/bin:\$PATH\"\n"
+    fi
+    echo -e "You can now run '${BOLD}vulnflow${RESET}' directly from any directory in your terminal!"
+    echo -e "Try:"
+    echo -e "  ${CYAN}vulnflow scan --repo fake-vuln-repo --mode report${RESET}"
+    echo -e "  ${CYAN}vulnflow serve${RESET}"
+    echo -e "  ${CYAN}vulnflow --help${RESET}\n"
+    exit 0
+    ;;
+
+  help|--help|-h)
+    cd "$ORIGINAL_PWD"
+    exec python3 "$VULNFLOW_ROOT/src/vulnflow/cli.py" --help
     ;;
 
   *)
+    cd "$ORIGINAL_PWD"
     exec python3 "$VULNFLOW_ROOT/src/vulnflow/cli.py" "$@"
     ;;
 esac
