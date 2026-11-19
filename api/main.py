@@ -96,6 +96,35 @@ try:
     def api_graph(package: str = "npm:lodash", repo: str = "workspace") -> Dict[str, Any]:
         return get_graph_data(package=package, repo=repo)
 
+    # Mount static frontend dashboard build if available
+    _UI_DIST = _REPO_ROOT / "ui" / "dist"
+    if _UI_DIST.exists() and (_UI_DIST / "index.html").exists():
+        try:
+            from fastapi.staticfiles import StaticFiles
+            app.mount("/", StaticFiles(directory=str(_UI_DIST), html=True), name="static_ui")
+            logger.info("Mounted static UI dashboard from %s", _UI_DIST)
+        except Exception as _e:
+            logger.warning("Could not mount static UI files: %s", _e)
+    else:
+        from fastapi.responses import HTMLResponse
+        @app.get("/", response_class=HTMLResponse)
+        def ui_placeholder() -> str:
+            return """
+            <!DOCTYPE html>
+            <html>
+            <head><title>VulnFlow Control Plane</title></head>
+            <body style="font-family:sans-serif;padding:3rem;background:#0b0f19;color:#e2e8f0;">
+                <h1 style="color:#38bdf8;">🛡️ VulnFlow AI Engine</h1>
+                <p>Backend API is active and running.</p>
+                <p>To access the Web Dashboard, build the UI bundle with: <code>cd ui && npm run build</code> or launch with <code>vulnflow serve --build-ui</code>.</p>
+                <div style="margin-top:1.5rem;">
+                    <a href="/docs" style="color:#38bdf8;margin-right:1rem;">API Documentation (Swagger)</a>
+                    <a href="/api/runs" style="color:#38bdf8;">Remediation Runs JSON</a>
+                </div>
+            </body>
+            </html>
+            """
+
 except ImportError:
     # Pure-Python ASGI 3 fallback when FastAPI is not installed in the environment
     from urllib.parse import parse_qs
@@ -164,6 +193,24 @@ except ImportError:
                     pkg = params.get("package", ["npm:lodash"])[0]
                     repo = params.get("repo", ["workspace"])[0]
                     await self._send_json(send, 200, get_graph_data(package=pkg, repo=repo))
+                elif not path.startswith("/api/"):
+                    _UI_DIST = _REPO_ROOT / "ui" / "dist"
+                    if _UI_DIST.exists():
+                        import mimetypes
+                        rel_path = path.lstrip("/")
+                        target_file = _UI_DIST / rel_path if rel_path else _UI_DIST / "index.html"
+                        if not target_file.is_file():
+                            target_file = _UI_DIST / "index.html"
+
+                        if target_file.is_file():
+                            ctype, _ = mimetypes.guess_type(str(target_file))
+                            content_type = ctype or "application/octet-stream"
+                            if target_file.suffix == ".html":
+                                content_type = "text/html; charset=utf-8"
+                            content_bytes = target_file.read_bytes()
+                            await self._send_response(send, 200, content_bytes, content_type)
+                            return
+                    await self._send_json(send, 404, {"error": "Not found", "path": path})
                 else:
                     await self._send_json(send, 404, {"error": "Not found", "path": path})
             except Exception as exc:

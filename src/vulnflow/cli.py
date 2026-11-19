@@ -155,10 +155,32 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     else:
         default_planner_agent.enable_llm = True
 
+    report_path = args.report
+    scanner = args.scanner
+
+    # Auto-detect scanner report if not explicitly provided
+    if not report_path:
+        repo_p = Path(args.repo)
+        candidates = [
+            (repo_p / "gitleaks.json", "gitleaks"),
+            (repo_p / "trivy.json", "trivy"),
+            (repo_p / "trivy-results.json", "trivy"),
+            (repo_p / "grype.json", "grype"),
+            (repo_p / "snyk.json", "snyk"),
+            (Path("data/fixtures/sample_gitleaks_report.json"), "gitleaks"),
+            (Path("vulnflow/data/fixtures/sample_gitleaks_report.json"), "gitleaks"),
+        ]
+        for c_path, c_scanner in candidates:
+            if c_path.exists():
+                report_path = str(c_path)
+                scanner = c_scanner
+                logger.info("Auto-detected security report at %s (scanner: %s)", report_path, scanner)
+                break
+
     state = VulnFlowState(
         repo_path=args.repo,
-        report_path=args.report,
-        scanner=args.scanner,
+        report_path=report_path,
+        scanner=scanner,
         mode=args.mode,
         ecosystem=args.ecosystem,
         auto_approve=getattr(args, "auto_approve", False),
@@ -348,15 +370,138 @@ def cmd_watch_expiry(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Launch unified VulnFlow API and Web Dashboard server."""
+    import os
+    import subprocess
+    import threading
+    import time
+    import webbrowser
+
+    host = getattr(args, "host", "0.0.0.0")
+    port = getattr(args, "port", 8000)
+    dev_mode = getattr(args, "dev", False)
+    build_ui = getattr(args, "build_ui", False)
+    auto_open = getattr(args, "open", False)
+    reload_backend = getattr(args, "reload", False)
+
+    # Locate directories relative to source
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    ui_dir = repo_root / "ui"
+    dist_dir = ui_dir / "dist"
+
+    # Build UI bundle if requested or if missing in production mode
+    if (build_ui or (not dev_mode and not (dist_dir / "index.html").exists())) and (ui_dir / "package.json").exists():
+        print("\n📦 Building frontend Web Dashboard bundle (Vite + React)...")
+        try:
+            subprocess.run(["npm", "run", "build"], cwd=str(ui_dir), check=True)
+            print("✅ Frontend dashboard built successfully.\n")
+        except Exception as exc:
+            logger.warning("Could not build frontend bundle: %s", exc)
+
+    vite_proc = None
+    if dev_mode and (ui_dir / "package.json").exists():
+        print(f"\n🚀 Launching Vite Dev Server (connecting to API on http://localhost:{port})...")
+        env = os.environ.copy()
+        env["VITE_API_BASE_URL"] = f"http://localhost:{port}"
+        try:
+            vite_proc = subprocess.Popen(["npm", "run", "dev"], cwd=str(ui_dir), env=env)
+        except Exception as exc:
+            logger.warning("Could not start Vite dev process: %s", exc)
+
+    target_url = "http://localhost:5173" if (dev_mode and vite_proc) else f"http://localhost:{port}"
+
+    width = 68
+    print("\n" + "=" * width)
+    print("🛡️   VulnFlow AI Autonomous Remediation Platform")
+    print("=" * width)
+    print(f"  • Web Dashboard:     {target_url}")
+    print(f"  • REST API Endpoint: http://localhost:{port}/api/runs")
+    print(f"  • OpenAPI Docs:      http://localhost:{port}/docs")
+    print(f"  • Engine Mode:       {'Development (Vite HMR + API)' if dev_mode else 'Production (Unified UI + API)'}")
+    print("=" * width)
+    print("  👉 Open Web Dashboard in your browser to inspect runs & approvals.")
+    print("  👉 Press Ctrl+C to terminate the server.\n")
+
+    if auto_open:
+        def _open():
+            time.sleep(1.2)
+            webbrowser.open(target_url)
+        threading.Thread(target=_open, daemon=True).start()
+
+    # Ensure repository root is on sys.path so api.main can be imported
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+    try:
+        try:
+            import uvicorn
+            uvicorn.run("api.main:app", host=host, port=port, reload=reload_backend)
+        except ImportError:
+            logger.error("uvicorn is not installed. Run: pip install 'uvicorn[standard]' or pip install 'vulnflow[all]'")
+            return 1
+    except KeyboardInterrupt:
+        print("\n🛑 Shutting down VulnFlow server...")
+    finally:
+        if vite_proc:
+            print("Stopping Vite dev server...")
+            vite_proc.terminate()
+            try:
+                vite_proc.wait(timeout=3)
+            except Exception:
+                vite_proc.kill()
+
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(prog="vulnflow", description="AI-driven vulnerability remediation engine")
+    parser = argparse.ArgumentParser(
+        prog="vulnflow",
+        description="🛡️ VulnFlow AI - Autonomous Vulnerability Remediation & Security Fabric",
+    )
+
+    # Friendly quick start when invoked with no arguments
+    raw_args = argv if argv is not None else sys.argv[1:]
+    if not raw_args:
+        parser.print_help()
+        print("\nQuick Start Guide:")
+        print("  vulnflow serve                 # Start unified Web Dashboard & API on http://localhost:8000")
+        print("  vulnflow serve --dev           # Start development mode with Vite hot-reload on :5173")
+        print("  vulnflow scan --repo <path>    # Scan and auto-remediate a repository")
+        print("  vulnflow report --repo <path>  # Generate assessment report without making code changes")
+        print("  vulnflow approve --plan-id <id> --resume --repo <path>  # Authorize review-tier plan\n")
+        return 0
+
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # serve
+    p_serve = subparsers.add_parser("serve", help="Launch unified VulnFlow API and Web Dashboard server")
+    p_serve.add_argument("--host", default="0.0.0.0", help="Binding host address (default: 0.0.0.0)")
+    p_serve.add_argument("--port", type=int, default=8000, help="Port to listen on (default: 8000)")
+    p_serve.add_argument("--dev", action="store_true", help="Launch Vite in development mode with HMR")
+    p_serve.add_argument("--build-ui", action="store_true", help="Rebuild frontend bundle before starting")
+    p_serve.add_argument("--reload", action="store_true", help="Auto-reload backend on Python file modifications")
+    p_serve.add_argument("--open", action="store_true", help="Automatically open browser to Dashboard URL")
+    p_serve.set_defaults(func=cmd_serve)
+
+    # scan (convenient alias for analyze)
+    p_scan = subparsers.add_parser("scan", help="Scan repository, deduplicate findings, and generate remediation plans")
+    p_scan.add_argument("--repo", default=".", help="Target repository directory path")
+    p_scan.add_argument("--report", help="Path to scanner JSON or SARIF report (auto-detected if omitted)")
+    p_scan.add_argument("--scanner", default="trivy", help="Security scanner name (trivy, grype, snyk, gitleaks)")
+    p_scan.add_argument("--mode", choices=["report", "pr", "dry-run"], default="pr", help="Execution mode")
+    p_scan.add_argument("--ecosystem", default="npm", help="Primary package ecosystem (npm, maven)")
+    p_scan.add_argument("--output", "-o", help="File path to save the generated report")
+    p_scan.add_argument("--format", choices=["markdown", "json"], default="markdown", help="Report format")
+    p_scan.add_argument("--no-llm", action="store_true", help="Skip remote LLM calls and use fast deterministic planner")
+    p_scan.add_argument("--auto-approve", action="store_true", help="Auto-approve review-tier plans without waiting for human sign-off")
+    p_scan.set_defaults(func=cmd_analyze)
 
     # analyze
     p_analyze = subparsers.add_parser("analyze", help="Ingest a report, group, plan, and remediate")
     p_analyze.add_argument("--repo", default=".", help="Target repository directory path")
-    p_analyze.add_argument("--report", help="Path to scanner JSON or SARIF report")
-    p_analyze.add_argument("--scanner", default="trivy", help="Security scanner name (trivy, grype, snyk)")
+    p_analyze.add_argument("--report", help="Path to scanner JSON or SARIF report (auto-detected if omitted)")
+    p_analyze.add_argument("--scanner", default="trivy", help="Security scanner name (trivy, grype, snyk, gitleaks)")
     p_analyze.add_argument("--mode", choices=["report", "pr", "dry-run"], default="pr", help="Execution mode")
     p_analyze.add_argument("--ecosystem", default="npm", help="Primary package ecosystem (npm, maven)")
     p_analyze.add_argument("--output", "-o", help="File path to save the generated report (e.g., report.md or report.json)")

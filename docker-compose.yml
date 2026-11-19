@@ -1,2 +1,29 @@
 # docker-compose.yml
-# Orchestrates local services including Neo4j, Qdrant, API service, and worker containers.
+# Orchestrates VulnFlow Control Plane, Web Dashboard, and local telemetry storage.
+
+version: '3.8'
+
+services:
+  vulnflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vulnflow-control-plane
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - VULNFLOW_ENV=production
+      - LOG_LEVEL=INFO
+    volumes:
+      - vulnflow-data:/app/.vulnflow
+      - ./:/workspace:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  vulnflow-data:
+    driver: local
