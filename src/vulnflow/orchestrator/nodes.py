@@ -213,7 +213,7 @@ def plan_node(state: VulnFlowState) -> VulnFlowState:
                 root_cause_id=rc_id,
                 findings=findings_objs,
                 advisories=advisories,
-                ecosystem=state.ecosystem,
+                ecosystem=pkg_eco,
             )
             plans.append(plan)
 
@@ -431,8 +431,11 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
 
                 rule_id = p.root_cause_id.replace("secret:", "")
                 file_rel = "javascript_sast_vulnerabilities.js"
-                if p.evidence and isinstance(p.evidence[0], dict) and p.evidence[0].get("file_path"):
-                    file_rel = p.evidence[0]["file_path"]
+                line_no = None
+                if p.evidence and isinstance(p.evidence[0], dict):
+                    if p.evidence[0].get("file_path"):
+                        file_rel = p.evidence[0]["file_path"]
+                    line_no = p.evidence[0].get("line")
 
                 target_file_path = repo_p / file_rel
                 if not target_file_path.exists():
@@ -445,45 +448,14 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
                 if target_file_path.exists():
                     try:
                         content = target_file_path.read_text(encoding="utf-8")
-                        is_js = target_file_path.suffix in (".js", ".ts", ".jsx", ".tsx")
-                        new_content = content
-
-                        if "aws-access" in rule_id.lower() or "aws_access" in rule_id.lower():
-                            if is_js:
-                                new_content = re.sub(
-                                    r"const\s+AWS_ACCESS_KEY\s*=\s*['\"][^'\"]+['\"];?",
-                                    "const AWS_ACCESS_KEY = process.env.AWS_ACCESS_KEY_ID || '';",
-                                    new_content,
-                                )
-                        elif "aws-secret" in rule_id.lower() or "aws_secret" in rule_id.lower():
-                            if is_js:
-                                new_content = re.sub(
-                                    r"const\s+AWS_SECRET_KEY\s*=\s*['\"][^'\"]+['\"];?",
-                                    "const AWS_SECRET_KEY = process.env.AWS_SECRET_ACCESS_KEY || '';",
-                                    new_content,
-                                )
-                        elif "generic-api" in rule_id.lower() or "api-key" in rule_id.lower() or "secret" in rule_id.lower():
-                            if is_js:
-                                new_content = re.sub(
-                                    r"const\s+API_SECRET\s*=\s*['\"][^'\"]+['\"];?",
-                                    "const API_SECRET = process.env.API_SECRET_KEY || '';",
-                                    new_content,
-                                )
-                        elif "pii" in rule_id.lower() or "ssn" in rule_id.lower():
-                            if is_js:
-                                new_content = re.sub(
-                                    r"const\s+USER_SSN\s*=\s*['\"][^'\"]+['\"];?",
-                                    "const USER_SSN = process.env.TEST_USER_SSN || '[REDACTED_PII]';",
-                                    new_content,
-                                )
-
+                        new_content, diff_content = default_secrets_agent.remediate_code(
+                            content=content,
+                            file_suffix=target_file_path.suffix,
+                            rule_id=rule_id,
+                            line_no=line_no,
+                        )
                         if new_content != content:
                             target_file_path.write_text(new_content, encoding="utf-8")
-                            diff_content = (
-                                f"--- {file_rel}\n+++ {file_rel}\n"
-                                f"- [REDACTED_CREDENTIAL_VALUE]\n"
-                                f"+ [ENVIRONMENT_VARIABLE_MIGRATED]"
-                            )
                     except Exception as exc:
                         logger.warning("Secret rotation file update failed: %s", exc)
 

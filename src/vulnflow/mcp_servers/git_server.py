@@ -214,7 +214,22 @@ class GitServer:
 
         repo_slug = self._extract_repo_name(repo_dir)
 
-        # 1. Attempt to open real PR via GitHub MCP server or API if configured
+        # 1. Ensure branch is pushed to remote origin if remote is configured so GitHub API recognizes head ref
+        if repo_dir:
+            repo_path = Path(repo_dir)
+            if (repo_path / ".git").exists():
+                try:
+                    subprocess.run(
+                        ["git", "push", "-u", "origin", branch],
+                        cwd=str(repo_path),
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        check=False,
+                    )
+                except Exception as exc:
+                    logger.debug("Failed to push branch %s to origin before PR creation: %s", branch, exc)
+
+        # 2. Attempt to open real PR via GitHub MCP server or API if configured
         if "/" in repo_slug:
             parts = repo_slug.split("/")
             gh_res = github_mcp_bridge.create_pull_request(
