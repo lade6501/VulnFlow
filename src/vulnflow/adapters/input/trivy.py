@@ -49,6 +49,21 @@ class TrivyAdapter:
 
         return self.parse_data(data, repo=repo, raw_ref=str(path))
 
+    def parse(
+        self,
+        content: Union[str, Dict[str, Any], List[Any]],
+        repo: str = "workspace",
+    ) -> List[Finding]:
+        """Convenience parse method accepting raw JSON string or deserialized dict."""
+        if isinstance(content, str):
+            try:
+                data = json.loads(content)
+            except Exception as exc:
+                raise ScannerParseError(f"Malformed JSON: {exc}") from exc
+        else:
+            data = content
+        return self.parse_data(data, repo=repo)
+
     def parse_data(
         self,
         data: Union[Dict[str, Any], List[Any]],

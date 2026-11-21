@@ -5,6 +5,7 @@ MCP tool server invoking Trivy, Grype, and Gitleaks security scanners and comput
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import subprocess
@@ -39,8 +40,12 @@ class ScanServer:
                 res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
                 if res.returncode == 0 and res.stdout.strip():
                     adapter = TrivyAdapter()
-                    findings = adapter.parse(res.stdout, repo=repo)
-                    return [f.to_dict() for f in findings]
+                    try:
+                        data = json.loads(res.stdout)
+                        findings = adapter.parse_data(data, repo=repo)
+                        return [f.to_dict() for f in findings]
+                    except Exception as parse_exc:
+                        logger.warning("Failed to parse live %s JSON output: %s", scanner, parse_exc)
             except Exception as exc:
                 logger.warning("Live scan_run failed: %s; returning empty baseline", exc)
         return []

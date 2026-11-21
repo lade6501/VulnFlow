@@ -24,11 +24,12 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     VULNFLOW_ENV=production
 
-# Install essential system dependencies (git for branches/patches, curl, ca-certificates)
+# Install essential system dependencies (git for branches/patches, curl, ca-certificates, and trivy for live scanning)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     ca-certificates \
+    && curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin \
     && rm -rf /var/lib/apt/lists/* \
     && git config --global --add safe.directory "*"
 

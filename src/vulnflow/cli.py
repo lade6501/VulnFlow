@@ -235,9 +235,6 @@ def cmd_analyze(args: argparse.Namespace) -> int:
             (repo_p / "gitleaks.json", "gitleaks"),
             (repo_p / "grype.json", "grype"),
             (repo_p / "snyk.json", "snyk"),
-            (Path("data/fixtures/sample_gitleaks_report.json"), "gitleaks"),
-            (Path("vulnflow/data/fixtures/sample_gitleaks_report.json"), "gitleaks"),
-            (Path(__file__).resolve().parent.parent.parent / "data/fixtures/sample_gitleaks_report.json", "gitleaks"),
         ]
         for c_path, c_scanner in candidates:
             if c_path.exists():
