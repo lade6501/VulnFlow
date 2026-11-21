@@ -105,27 +105,81 @@ class ScanServer:
 
         return findings
 
+    def _ensure_npm_lockfile(self, repo_path: Path) -> Optional[Path]:
+        """
+        If package.json exists without package-lock.json, generate a synthetic lockfile v2
+        so Trivy can discover all declared npm package vulnerabilities without requiring npm install.
+        """
+        pkg_json = repo_path / "package.json"
+        pkg_lock = repo_path / "package-lock.json"
+        if not pkg_json.exists() or pkg_lock.exists():
+            return None
+
+        try:
+            with open(pkg_json, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            deps = data.get("dependencies", {})
+            dev_deps = data.get("devDependencies", {})
+            all_deps = {**deps, **dev_deps}
+            if not all_deps:
+                return None
+
+            packages = {"": {"name": data.get("name", "app"), "version": data.get("version", "1.0.0"), "dependencies": deps}}
+            lock_deps = {}
+            for pkg_name, ver in all_deps.items():
+                clean_ver = ver.lstrip("^~>=< ")
+                packages[f"node_modules/{pkg_name}"] = {"version": clean_ver}
+                lock_deps[pkg_name] = {"version": clean_ver}
+
+            lock_data = {
+                "name": data.get("name", "app"),
+                "version": data.get("version", "1.0.0"),
+                "lockfileVersion": 2,
+                "requires": True,
+                "packages": packages,
+                "dependencies": lock_deps,
+            }
+            with open(pkg_lock, "w", encoding="utf-8") as f:
+                json.dump(lock_data, f, indent=2)
+            logger.info("Generated synthetic package-lock.json for %d npm dependencies", len(all_deps))
+            return pkg_lock
+        except Exception as exc:
+            logger.warning("Could not generate synthetic package-lock.json: %s", exc)
+            return None
+
     def scan_run(self, repo: str, scanner: str = "trivy") -> List[Dict[str, Any]]:
         """MCP tool: scan_run - Runs vulnerability scan on target repo."""
         logger.info("Executing scan_run with %s on %s", scanner, repo)
         repo_path = Path(repo)
         findings: List[Finding] = []
 
+        # Ensure npm lockfile exists so Trivy does not silently skip package.json
+        synth_lock: Optional[Path] = None
+        if repo_path.exists():
+            synth_lock = self._ensure_npm_lockfile(repo_path)
+
         # 1. Run live external scanner (Trivy) for dependency CVEs and vendor tokens
-        bin_path = shutil.which(scanner)
-        if bin_path and repo_path.exists():
-            try:
-                cmd = [bin_path, "fs", "--format", "json", str(repo_path)]
-                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
-                if res.returncode == 0 and res.stdout.strip():
-                    adapter = TrivyAdapter()
-                    try:
-                        data = json.loads(res.stdout)
-                        findings.extend(adapter.parse_data(data, repo=repo))
-                    except Exception as parse_exc:
-                        logger.warning("Failed to parse live %s JSON output: %s", scanner, parse_exc)
-            except Exception as exc:
-                logger.warning("Live scan_run failed: %s; returning empty baseline", exc)
+        try:
+            bin_path = shutil.which(scanner)
+            if bin_path and repo_path.exists():
+                try:
+                    cmd = [bin_path, "fs", "--format", "json", str(repo_path)]
+                    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+                    if res.returncode == 0 and res.stdout.strip():
+                        adapter = TrivyAdapter()
+                        try:
+                            data = json.loads(res.stdout)
+                            findings.extend(adapter.parse_data(data, repo=repo))
+                        except Exception as parse_exc:
+                            logger.warning("Failed to parse live %s JSON output: %s", scanner, parse_exc)
+                except Exception as exc:
+                    logger.warning("Live scan_run failed: %s; returning empty baseline", exc)
+        finally:
+            if synth_lock and synth_lock.exists():
+                try:
+                    synth_lock.unlink()
+                except Exception:
+                    pass
 
         # 2. Augment with source-level secret, database password, API key, and PII detection
         if repo_path.exists():
