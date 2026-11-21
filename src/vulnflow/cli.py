@@ -264,10 +264,12 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     out_arg = getattr(args, "output", None)
     out_format = getattr(args, "format", "markdown")
 
+    repo_base = Path(args.repo) if getattr(args, "repo", None) and str(args.repo) != "." else Path(".")
+    env_rep = os.environ.get("VULNFLOW_REPORTS_DIR")
     if out_arg:
         out_path = Path(out_arg)
     else:
-        reports_dir = Path(".vulnflow/reports")
+        reports_dir = Path(env_rep) if env_rep else (repo_base / ".vulnflow" / "reports")
         reports_dir.mkdir(parents=True, exist_ok=True)
         ext = "json" if out_format == "json" else "md"
         out_path = reports_dir / f"report_{result.run_id}.{ext}"
@@ -278,6 +280,19 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     else:
         write_markdown_report(result, out_path)
         print(f"📄 Executive Markdown report written to: {out_path}\n")
+
+    # Also persist audit events into repo_base/.vulnflow/audit
+    env_audit = os.environ.get("VULNFLOW_AUDIT_DIR")
+    audit_dir = Path(env_audit) if env_audit else (repo_base / ".vulnflow" / "audit")
+    try:
+        audit_dir.mkdir(parents=True, exist_ok=True)
+        if result.audit_events:
+            audit_file = audit_dir / f"audit_{result.run_id}.jsonl"
+            with open(audit_file, "w", encoding="utf-8") as f:
+                for ev in result.audit_events:
+                    f.write(json.dumps(ev) + "\n")
+    except Exception as exc:
+        logger.debug("Could not write audit events to %s: %s", audit_dir, exc)
 
     # Ensure all LangSmith traces are flushed before exit
     if langsmith_tracer.is_enabled():
