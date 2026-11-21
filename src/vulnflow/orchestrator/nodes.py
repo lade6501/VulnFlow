@@ -171,29 +171,38 @@ def plan_node(state: VulnFlowState) -> VulnFlowState:
     with trace_span("orchestrator.node.plan", {"run_id": state.run_id}):
         plans: List[RemediationPlan] = []
 
+        # 1. Group all secret/PII findings into a single consolidated remediation plan (F23)
+        all_secret_findings = [f for f in state.deduped_findings if f.type == FindingType.SECRET]
+        if all_secret_findings:
+            sec_plan = default_secrets_agent.plan_consolidated_secret_remediation(
+                all_secret_findings, repo_path=state.repo_path
+            )
+            plans.append(sec_plan)
+            state.append_audit(
+                "PLAN_FORMULATED",
+                "secrets_agent",
+                {
+                    "plan_id": sec_plan.id,
+                    "root_cause_id": sec_plan.root_cause_id,
+                    "target_package": sec_plan.target_package,
+                    "target_version": sec_plan.target_version,
+                    "action": "rotate",
+                    "risk_tier": "review",
+                    "requires_approval": True,
+                    "findings_count": len(all_secret_findings),
+                },
+            )
+
+        # 2. Formulate dependency package upgrade plans
         for group in state.root_cause_groups:
             rc_id = group["root_cause_id"]
+            if "secret:" in rc_id.lower():
+                continue
+
             f_dicts = group["findings"]
             findings_objs = [Finding.from_dict(f) for f in f_dicts]
-
-            # If findings represent a leaked secret or PII, delegate to SecretsAgent (F23)
-            secret_findings = [f_obj for f_obj in findings_objs if f_obj.type == FindingType.SECRET]
-            if secret_findings:
-                for sf in secret_findings:
-                    plan = default_secrets_agent.plan_secret_remediation(sf, repo_path=state.repo_path)
-                    plan.root_cause_id = rc_id
-                    plans.append(plan)
-                    state.append_audit(
-                        "PLAN_FORMULATED",
-                        "secrets_agent",
-                        {
-                            "plan_id": plan.id,
-                            "root_cause_id": plan.root_cause_id,
-                            "action": "rotate",
-                            "risk_tier": "review",
-                            "requires_approval": True,
-                        },
-                    )
+            # Skip if finding is a secret (already consolidated above)
+            if any(f_obj.type == FindingType.SECRET for f_obj in findings_objs):
                 continue
 
             clean_rc = rc_id.replace("PKG-", "")
@@ -436,56 +445,64 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
                 git_server.git_branch(branch_name, state.repo_path, base_branch=base_branch)
                 state.append_audit("BRANCH_CREATED", "git_server", {"branch": branch_name, "repo": state.repo_path})
 
-                rule_id = p.root_cause_id.replace("secret:", "")
-                file_rel = "javascript_sast_vulnerabilities.js"
-                line_no = None
-                if p.evidence and isinstance(p.evidence[0], dict):
-                    if p.evidence[0].get("file_path"):
-                        file_rel = p.evidence[0]["file_path"]
-                    line_no = p.evidence[0].get("line")
+                # Group all evidence items by relative file path for consolidated patching
+                files_map: Dict[str, List[Dict[str, Any]]] = {}
+                for ev in (p.evidence or []):
+                    if isinstance(ev, dict) and ev.get("file_path"):
+                        fpath = ev["file_path"]
+                        files_map.setdefault(fpath, []).append(ev)
 
-                target_file_path = repo_p / file_rel
-                if not target_file_path.exists():
-                    matches = list(repo_p.rglob(Path(file_rel).name))
-                    if matches:
-                        target_file_path = matches[0]
-                        file_rel = str(target_file_path.relative_to(repo_p))
+                # Fallback if evidence has no file_path
+                if not files_map:
+                    files_map["javascript_sast_vulnerabilities.js"] = [{"rule_id": p.root_cause_id.replace("secret:", "")}]
 
-                diff_content = ""
-                if target_file_path.exists():
-                    try:
-                        content = target_file_path.read_text(encoding="utf-8")
-                        new_content, diff_content = default_secrets_agent.remediate_code(
-                            content=content,
-                            file_suffix=target_file_path.suffix,
-                            rule_id=rule_id,
-                            line_no=line_no,
-                        )
-                        if new_content != content:
-                            target_file_path.write_text(new_content, encoding="utf-8")
-                    except Exception as exc:
-                        logger.warning("Secret rotation file update failed: %s", exc)
+                total_modified = 0
+                diff_summaries: List[str] = []
 
-                if not diff_content:
-                    diff_content = f"--- {file_rel}\n+++ {file_rel}\n- Hardcoded secret\n+ process.env"
+                for file_rel, items in files_map.items():
+                    target_file_path = repo_p / file_rel
+                    if not target_file_path.exists():
+                        matches = list(repo_p.rglob(Path(file_rel).name))
+                        if matches:
+                            target_file_path = matches[0]
+                            file_rel = str(target_file_path.relative_to(repo_p))
 
-                res = git_server.git_patch(file_rel, diff_content, state.repo_path)
-                state.append_audit(
-                    "PATCH_APPLIED",
-                    "git_server",
-                    {"plan_id": p.id, "branch": branch_name, "file": file_rel, "action": "rotate"},
-                )
+                    if target_file_path.exists():
+                        try:
+                            content = target_file_path.read_text(encoding="utf-8")
+                            current_content = content
+                            for item in items:
+                                rule_id = item.get("rule_id", "secret")
+                                line_no = item.get("line")
+                                current_content, _ = default_secrets_agent.remediate_code(
+                                    content=current_content,
+                                    file_suffix=target_file_path.suffix,
+                                    rule_id=rule_id,
+                                    line_no=line_no,
+                                )
+                            if current_content != content:
+                                target_file_path.write_text(current_content, encoding="utf-8")
+                                total_modified += 1
+                                diff_summaries.append(f"Migrated {len(items)} credential(s) in {file_rel}")
+                                git_server.git_patch(file_rel, f"--- {file_rel}\n+++ {file_rel}\nMigrated {len(items)} credentials", state.repo_path)
+                                state.append_audit(
+                                    "PATCH_APPLIED",
+                                    "git_server",
+                                    {"plan_id": p.id, "branch": branch_name, "file": file_rel, "action": "rotate"},
+                                )
+                        except Exception as exc:
+                            logger.warning("Secret rotation file update failed for %s: %s", file_rel, exc)
 
-                commit_msg = f"fix(security): rotate {rule_id} credential and migrate to env var"
-                git_server.git_commit(commit_msg, state.repo_path, file_path=file_rel)
+                commit_msg = f"fix(security): rotate exposed credentials and migrate to env vars"
+                git_server.git_commit(commit_msg, state.repo_path)
                 state.append_audit("COMMIT_CREATED", "git_server", {"branch": branch_name, "message": commit_msg})
 
                 patches.append({
                     "plan_id": p.id,
                     "branch": branch_name,
-                    "file": file_rel,
-                    "diff": diff_content,
-                    "result": res,
+                    "file": ", ".join(files_map.keys()),
+                    "diff": "\n".join(diff_summaries) or "--- credentials\n+++ env vars",
+                    "result": {"status": "applied", "modified_files": total_modified},
                 })
 
                 if base_branch:

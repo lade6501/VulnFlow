@@ -220,6 +220,77 @@ class SecretsAgent:
         )
         return plan
 
+    def plan_consolidated_secret_remediation(
+        self,
+        findings: List[Finding],
+        repo_path: str = ".",
+    ) -> RemediationPlan:
+        """
+        Group multiple secret/PII findings into a single consolidated remediation plan.
+        Enables security reviewers to approve credential rotation across the repository in a single atomic gate.
+        """
+        if not findings:
+            raise ValueError("Cannot formulate secret remediation plan with empty findings")
+
+        if len(findings) == 1:
+            return self.plan_secret_remediation(findings[0], repo_path=repo_path)
+
+        finding_ids = [f.id for f in findings]
+        files = sorted({f.location.file_path for f in findings if f.location and f.location.file_path})
+
+        evidence_items = []
+        for sf in findings:
+            rule_id = sf.metadata.get("rule_id", "secret")
+            file_path = sf.location.file_path if sf.location else "unknown"
+            line_no = sf.location.line if sf.location else None
+            raw_fp = str(sf.metadata.get("fingerprint", "N/A"))
+            masked_fp = redact_secrets(raw_fp)
+            if masked_fp == raw_fp and len(raw_fp) > 8 and raw_fp != "N/A":
+                import hashlib
+                masked_fp = f"SHA256:{hashlib.sha256(raw_fp.encode('utf-8')).hexdigest()[:12]}"
+            evidence_items.append({
+                "rule_id": rule_id,
+                "file_path": file_path,
+                "line": line_no,
+                "fingerprint": masked_fp,
+            })
+
+        checklist = [
+            "1. Revoke the exposed credentials immediately in the respective upstream provider dashboards.",
+            "2. Issue replacement credentials and store securely in a vault (e.g. AWS Secrets Manager, Vault, GitHub Secrets).",
+            "3. Refactor application code to read credentials from environment variables instead of hardcoding.",
+            "4. If committed to public history, purge git history using git-filter-repo or BFG Repo-Cleaner.",
+        ]
+
+        summary_lines = [
+            f"Consolidated Credential & Secret Remediation Plan ({len(findings)} finding(s) detected across {len(files)} file(s)).",
+            "• Detected Credentials:",
+        ]
+        for ev in evidence_items:
+            summary_lines.append(f"  - {ev['rule_id']} in {ev['file_path']}:{ev['line']}")
+        summary_lines.append("• Action: ROTATE and migrate all hardcoded credentials to environment variables.")
+        summary_lines.append("• Governance: Classified as REVIEW tier; requires single authorization gate.")
+        summary_lines.append("\nRotation Checklist:\n" + "\n".join(checklist))
+
+        rationale = redact_secrets("\n".join(summary_lines))
+
+        import hashlib
+        id_hash = hashlib.sha256("".join(sorted(finding_ids)).encode("utf-8")).hexdigest()[:8]
+
+        plan = RemediationPlan(
+            id=f"PLAN-SEC-{id_hash}",
+            finding_ids=finding_ids,
+            root_cause_id="secret:credentials",
+            action=RemediationAction.ROTATE,
+            target_package="secret:credentials",
+            target_version="env-var",
+            risk_tier=RiskTier.REVIEW,
+            requires_approval=True,
+            rationale=rationale,
+            evidence=evidence_items,
+        )
+        return plan
+
     formulate_rotation_plan = plan_secret_remediation
 
 
