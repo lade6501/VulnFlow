@@ -219,13 +219,18 @@ class GitServer:
             repo_path = Path(repo_dir)
             if (repo_path / ".git").exists():
                 try:
-                    subprocess.run(
+                    push_res = subprocess.run(
                         ["git", "push", "-u", "origin", branch],
                         cwd=str(repo_path),
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
+                        text=True,
                         check=False,
                     )
+                    if push_res.returncode == 0:
+                        logger.info("Successfully pushed branch %s to origin before PR creation", branch)
+                    else:
+                        logger.warning("git push origin %s returned code %d: %s", branch, push_res.returncode, push_res.stderr.strip())
                 except Exception as exc:
                     logger.debug("Failed to push branch %s to origin before PR creation: %s", branch, exc)
 

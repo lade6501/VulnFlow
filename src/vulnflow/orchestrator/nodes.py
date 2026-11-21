@@ -148,7 +148,14 @@ def policy_node(state: VulnFlowState) -> VulnFlowState:
         has_blocked_package = False
         for group in state.root_cause_groups:
             rc_id = group["root_cause_id"].replace("PKG-", "")
-            pol = default_policy_engine.check(rc_id, "latest", state.ecosystem)
+            pkg_eco = state.ecosystem
+            if ":" in rc_id:
+                prefix = rc_id.split(":", 1)[0].lower()
+                if prefix in ("pip", "pypi", "python"):
+                    pkg_eco = "PyPI"
+                elif prefix in ("npm", "node"):
+                    pkg_eco = "npm"
+            pol = default_policy_engine.check(rc_id, "latest", pkg_eco)
             group["policy"] = pol.to_dict()
             if pol.status in (PolicyStatus.BANNED.value, PolicyStatus.LICENSE_DENIED.value):
                 has_blocked_package = True
@@ -556,7 +563,14 @@ def pr_node(state: VulnFlowState) -> VulnFlowState:
 
             # Confirm registry availability before PR for dependency packages (F14)
             if plan.action in (RemediationAction.BUMP, RemediationAction.REPLACE) and plan.target_version and plan.target_package:
-                reg_check = registry_check(plan.target_package, plan.target_version, state.ecosystem)
+                plan_eco = state.ecosystem
+                if ":" in plan.target_package:
+                    prefix = plan.target_package.split(":", 1)[0].lower()
+                    if prefix in ("pip", "pypi", "python"):
+                        plan_eco = "PyPI"
+                    elif prefix in ("npm", "node"):
+                        plan_eco = "npm"
+                reg_check = registry_check(plan.target_package, plan.target_version, plan_eco)
                 if not reg_check.get("available", True):
                     logger.warning("Registry check rejected PR: %s not in registry", plan.target_version)
                     state.append_audit("REGISTRY_CHECK_FAILED", "registry_server", reg_check)
