@@ -169,7 +169,8 @@ def section_divider(title: str, width: int = 70, color_fn: Any = cyan) -> str:
     """Render a styled section divider."""
     prefix = f"{title} "
     remaining = max(0, width - len(prefix) - 2)
-    return f"\n{color_fn(f'── {prefix}{'─' * remaining}')}"
+    fill = "─" * remaining
+    return f"\n{color_fn(f'── {prefix}{fill}')}"
 
 
 def stat_card(label: str, value: Any, color_fn: Any = cyan) -> str:
