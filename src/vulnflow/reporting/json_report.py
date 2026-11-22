@@ -32,16 +32,28 @@ def write_json_report(
     """Atomically persist validated canonical report JSON."""
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(out.parent, 0o755)
+    except OSError:
+        pass
     payload = json.dumps(generate_json_report(report), indent=2, sort_keys=True) + "\n"
     descriptor, temp_name = tempfile.mkstemp(
         prefix=f".{out.name}.", dir=out.parent, text=True
     )
     try:
+        try:
+            os.fchmod(descriptor, 0o644)
+        except (OSError, AttributeError):
+            pass
         with os.fdopen(descriptor, "w", encoding="utf-8") as target:
             target.write(payload)
             target.flush()
             os.fsync(target.fileno())
         os.replace(temp_name, out)
+        try:
+            os.chmod(out, 0o644)
+        except OSError:
+            pass
     except BaseException:
         try:
             os.unlink(temp_name)
