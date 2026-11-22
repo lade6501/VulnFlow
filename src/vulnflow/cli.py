@@ -383,29 +383,45 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 
 def cmd_approve(args: argparse.Namespace) -> int:
-    """Record human approval or rejection for a review-tier plan and optionally resume execution."""
+    """Record human approval or rejection for review-tier plan(s) and optionally resume execution."""
     from vulnflow.orchestrator.approval import global_approval_gate, load_run_state
 
-    plan_id = args.plan_id
+    raw_plan_id = getattr(args, "plan_id", None)
+    approve_all = getattr(args, "all", False) or (raw_plan_id and raw_plan_id.lower() in ("all", "*"))
     is_reject = getattr(args, "reject", False)
     reviewer = getattr(args, "reviewer", "security-lead")
     reason = getattr(args, "reason", None)
     repo = getattr(args, "repo", ".")
 
-    # Record decision in persistent approval gate (F21)
-    global_approval_gate.record_decision(
-        plan_id=plan_id,
-        approved=(not is_reject),
-        reviewer=reviewer,
-        reason=reason,
-        repo_path=repo,
-    )
+    target_plan_ids = []
+    if approve_all:
+        target_plan_ids = ["all"]
+        pending_list = global_approval_gate.list_pending()
+        if pending_list:
+            target_plan_ids.extend(pending_list)
+    elif raw_plan_id:
+        target_plan_ids = [pid.strip() for pid in raw_plan_id.split(",") if pid.strip()]
 
+    if not target_plan_ids:
+        print("\n❌ Error: Please specify --plan-id <ID> (or comma-separated list), or pass --all.\n")
+        return 1
+
+    # Record decisions in persistent approval gate (F21)
+    for pid in target_plan_ids:
+        global_approval_gate.record_decision(
+            plan_id=pid,
+            approved=(not is_reject),
+            reviewer=reviewer,
+            reason=reason,
+            repo_path=repo,
+        )
+
+    summary_targets = "ALL pending plans" if approve_all else ", ".join(target_plan_ids)
     if is_reject:
-        print(f"\n🛑 Plan {plan_id} REJECTED by {reviewer}. Reason: {reason or 'No reason provided'}\n")
+        print(f"\n🛑 Plan(s) {summary_targets} REJECTED by {reviewer}. Reason: {reason or 'No reason provided'}\n")
         return 0
 
-    print(f"\n✅ Plan {plan_id} APPROVED by {reviewer}.")
+    print(f"\n✅ Plan(s) {summary_targets} APPROVED by {reviewer}.")
 
     # Resume workflow if requested
     if getattr(args, "resume", False):
@@ -420,7 +436,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
         _print_execution_summary(result)
         return result.exit_code
 
-    print(f"Run 'vulnflow analyze --repo {repo}' or 'vulnflow fix --plan-id {plan_id} --repo {repo}' to apply approved plan.\n")
+    print(f"Run 'vulnflow analyze --repo {repo}' to apply approved plan(s).\n")
     return 0
 
 
@@ -751,8 +767,9 @@ def main(argv: list[str] | None = None) -> int:
     p_verify.set_defaults(func=cmd_verify)
 
     # approve
-    p_approve = subparsers.add_parser("approve", help="Record human approval or rejection for a review-tier plan")
-    p_approve.add_argument("--plan-id", required=True, help="Remediation plan ID")
+    p_approve = subparsers.add_parser("approve", help="Record human approval or rejection for review-tier plan(s)")
+    p_approve.add_argument("--plan-id", default=None, help="Remediation plan ID (or 'all', or comma-separated list)")
+    p_approve.add_argument("--all", action="store_true", help="Authorize all pending plans in the repository")
     p_approve.add_argument("--reject", action="store_true", help="Reject the remediation plan instead of approving")
     p_approve.add_argument("--reviewer", default="security-lead", help="Reviewer identifier or email")
     p_approve.add_argument("--reason", help="Explanation or justification for decision")

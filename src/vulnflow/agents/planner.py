@@ -364,7 +364,7 @@ class PlannerAgent:
             tests_passed=True,
             max_cvss=max_cvss,
         )
-        if requires_approval and code_tier == RiskTier.AUTO:
+        if requires_approval and bump_type == "major" and code_tier == RiskTier.AUTO:
             code_tier = RiskTier.REVIEW
         risk_tier = code_tier
 

@@ -89,23 +89,24 @@ def calculate_risk_tier(
     if not tests_passed:
         return RiskTier.REVIEW
 
-    # Rule 4: Unknown package policy
-    if pol_str in (PolicyStatus.UNKNOWN.value, "unknown", "require_approval"):
-        return RiskTier.REVIEW
-
-    # Rule 5: SemVer bump size evaluation
+    # Rule 4: SemVer bump size and unknown package evaluation
     bump_type = classify_semver_bump(current_version, target_version)
+
+    # Major version bumps always require human security review
     if bump_type == "major":
         return RiskTier.REVIEW
 
-    if bump_type == "minor" and is_direct:
+    # Unknown package policy: allow routine patch bumps to auto-approve, require review for others
+    if pol_str in (PolicyStatus.UNKNOWN.value, "unknown", "require_approval"):
+        if bump_type == "patch" and tests_passed:
+            return RiskTier.AUTO
         return RiskTier.REVIEW
 
-    # Rule 6: High CVSS critical vulnerability requiring sign-off
-    if max_cvss >= 9.0 and is_direct:
+    # High CVSS critical vulnerability on direct dependency requiring sign-off
+    if max_cvss >= 9.0 and is_direct and bump_type != "patch":
         return RiskTier.REVIEW
 
-    # Default for approved patch bumps with passing tests
+    # Default for routine patch/minor bumps with passing tests
     return RiskTier.AUTO
 
 

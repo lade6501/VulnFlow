@@ -103,6 +103,8 @@ class ApprovalGate:
     def is_approved(self, plan_id: str, repo_path: Optional[str] = None) -> bool:
         """Check whether a plan has received approval."""
         self._load_persisted(repo_path)
+        if self._decisions.get("all", {}).get("approved", False) or self._decisions.get("*", {}).get("approved", False):
+            return True
         return self._decisions.get(plan_id, {}).get("approved", False)
 
     def is_rejected(self, plan_id: str, repo_path: Optional[str] = None) -> bool:
