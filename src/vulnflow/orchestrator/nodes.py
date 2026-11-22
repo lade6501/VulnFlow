@@ -302,12 +302,25 @@ def approve_node(state: VulnFlowState) -> VulnFlowState:
             else:
                 pending_review.append(p)
                 global_approval_gate.submit_for_approval(p, repo_path=state.repo_path)
-                notify_server.approval_request(p.to_dict())
                 state.append_audit(
                     "APPROVAL_REQUESTED",
                     "policy_engine",
                     {"plan_id": p.id, "target_package": p.target_package, "risk_tier": tier_val, "status": "pending_human_approval"},
                 )
+
+        # Dispatch a single consolidated digest notification for the run instead of spamming individual pings
+        if pending_review or approved:
+            notify_server.send_run_digest(
+                run_id=state.run_id,
+                repo=state.repo_path,
+                approved_plans=[p.to_dict() for p in approved],
+                pending_plans=[p.to_dict() for p in pending_review],
+            )
+            state.append_audit(
+                "DIGEST_NOTIFICATION_SENT",
+                "notify_server",
+                {"approved_count": len(approved), "pending_count": len(pending_review)},
+            )
 
         state.approved_plans = approved
         state.rejected_plans = rejected
