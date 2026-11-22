@@ -56,20 +56,60 @@ def _write_run_reports(result: VulnFlowState, args: argparse.Namespace) -> list[
         logger.warning("Run report snapshot could not be built: %s", exc)
         return []
 
+    requested = _requested_report_formats(args)
+    names = {"json": "run-report.json", "html": "report.html", "md": "report.md"}
+    writers = {"json": write_json_report, "html": write_html_report, "md": write_markdown_report}
+
     legacy_output = getattr(args, "output", None)
+    targets: list[tuple[str, Path]] = []
+
     if legacy_output:
         path = Path(legacy_output)
         suffix = path.suffix.lower()
-        report_format = "json" if suffix == ".json" else "html" if suffix in {".html", ".htm"} else "md"
-        targets = [(report_format, path)]
+        if suffix in {".json", ".html", ".htm", ".md"}:
+            primary_fmt = "json" if suffix == ".json" else "html" if suffix in {".html", ".htm"} else "md"
+            targets.append((primary_fmt, path))
+            # Also output any other requested formats into the same parent directory
+            base_dir = path.parent
+            for fmt in requested:
+                if fmt != primary_fmt:
+                    target_name = names[fmt] if path.stem in {"report", "run-report"} else f"{path.stem}.{fmt}"
+                    targets.append((fmt, base_dir / target_name))
+        else:
+            # path is a directory (e.g. --output /repo/.vulnflow/reports)
+            for fmt in requested:
+                targets.append((fmt, path / names[fmt]))
     else:
-        base = Path(getattr(args, "out_dir", None) or "vulnflow-report") / result.run_id
-        names = {"json": "run-report.json", "html": "report.html", "md": "report.md"}
-        targets = [(item, base / names[item]) for item in _requested_report_formats(args)]
+        env_reports = os.environ.get("VULNFLOW_REPORTS_DIR")
+        if env_reports:
+            base = Path(env_reports)
+        elif getattr(args, "out_dir", None):
+            base = Path(args.out_dir) / result.run_id
+        else:
+            repo_base = Path(getattr(args, "repo", ".")) if getattr(args, "repo", None) and str(args.repo) != "." else Path(".")
+            if (repo_base / ".vulnflow" / "reports").exists():
+                base = repo_base / ".vulnflow" / "reports"
+            else:
+                base = Path("vulnflow-report") / result.run_id
 
-    writers = {"json": write_json_report, "html": write_html_report, "md": write_markdown_report}
+        for fmt in requested:
+            targets.append((fmt, base / names[fmt]))
+
+    # If markdown report is generated, make sure report.html is always generated alongside it
+    # so that links to report.html in markdown are never broken
+    has_md = any(fmt == "md" for fmt, _ in targets)
+    has_html = any(fmt == "html" for fmt, _ in targets)
+    if has_md and not has_html:
+        md_target = next(p for fmt, p in targets if fmt == "md")
+        html_target = md_target.parent / "report.html"
+        targets.append(("html", html_target))
+
     written: list[Path] = []
+    seen: set[Path] = set()
     for report_format, path in targets:
+        if path in seen:
+            continue
+        seen.add(path)
         try:
             written.append(writers[report_format](snapshot, path))
         except Exception as exc:  # noqa: BLE001
@@ -434,6 +474,23 @@ def cmd_approve(args: argparse.Namespace) -> int:
             result = run_workflow(state)
         default_run_store.save_run(result)
         _print_execution_summary(result)
+
+        written_reports = _write_run_reports(result, args)
+        for report_p in written_reports:
+            print(f"Report written to: {report_p}")
+
+        repo_base = Path(repo) if repo and str(repo) != "." else Path(".")
+        env_audit = os.environ.get("VULNFLOW_AUDIT_DIR")
+        audit_dir = Path(env_audit) if env_audit else (repo_base / ".vulnflow" / "audit")
+        try:
+            audit_dir.mkdir(parents=True, exist_ok=True)
+            if result.audit_events:
+                audit_file = audit_dir / f"audit_{result.run_id}.jsonl"
+                with open(audit_file, "w", encoding="utf-8") as f:
+                    f.writelines(json.dumps(ev) + "\n" for ev in result.audit_events)
+        except (OSError, TypeError) as exc:
+            logger.debug("Could not write audit events to %s: %s", audit_dir, exc)
+
         return result.exit_code
 
     print(f"Run 'vulnflow analyze --repo {repo}' to apply approved plan(s).\n")

@@ -449,3 +449,58 @@ def test_failed_remediation_and_test_failure() -> None:
     checks = {item.check: item for item in report.root_causes[0].verification_results}
     assert checks["sandbox_tests"].passed is False
 
+
+def test_write_run_reports_generates_html_and_json_alongside_markdown(tmp_path: Path) -> None:
+    """Ensure that specifying --output report.md also generates report.html and run-report.json."""
+    from vulnflow import cli
+
+    state = report_state()
+    md_file = tmp_path / "report.md"
+    args = type(
+        "Args",
+        (),
+        {
+            "output": str(md_file),
+            "out_dir": None,
+            "output_format": "html,md,json",
+            "format": None,
+            "repo": ".",
+        },
+    )()
+    written = cli._write_run_reports(state, args)
+    written_names = [p.name for p in written]
+    assert "report.md" in written_names
+    assert "report.html" in written_names
+    assert "run-report.json" in written_names
+
+    assert (tmp_path / "report.md").exists()
+    assert (tmp_path / "report.html").exists()
+    assert (tmp_path / "run-report.json").exists()
+
+
+def test_write_run_reports_with_env_reports_dir(monkeypatch, tmp_path: Path) -> None:
+    """Ensure VULNFLOW_REPORTS_DIR environment variable is respected when output is omitted."""
+    from vulnflow import cli
+
+    state = report_state()
+    reports_dir = tmp_path / "custom_reports"
+    monkeypatch.setenv("VULNFLOW_REPORTS_DIR", str(reports_dir))
+    args = type(
+        "Args",
+        (),
+        {
+            "output": None,
+            "out_dir": None,
+            "output_format": "html,md",
+            "format": None,
+            "repo": ".",
+        },
+    )()
+    written = cli._write_run_reports(state, args)
+    written_names = [p.name for p in written]
+    assert "report.html" in written_names
+    assert "report.md" in written_names
+    assert (reports_dir / "report.html").exists()
+    assert (reports_dir / "report.md").exists()
+
+
