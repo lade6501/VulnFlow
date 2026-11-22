@@ -2,7 +2,8 @@ name: Build and Publish Container Image
 
 on:
   push:
-    branches: [main]
+    branches:
+      - '**'
   workflow_dispatch:
 
 jobs:
@@ -29,7 +30,16 @@ jobs:
       - name: Prepare Image Name
         run: |
           OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "IMAGE_TAG=ghcr.io/${OWNER}/vulnflow:latest" >> $GITHUB_ENV
+          REF_NAME="${{ github.ref_name }}"
+          if [ "$REF_NAME" = "main" ]; then
+            IMAGE_TAG="ghcr.io/${OWNER}/vulnflow:latest,ghcr.io/${OWNER}/vulnflow:main"
+          else
+            # Sanitize branch name for Docker tag: lowercase, replace slashes and invalid chars with dashes
+            SANITIZED_BRANCH=$(echo "$REF_NAME" | tr '[:upper:]' '[:lower:]' | sed -e 's/[^a-z0-9._-]/-/g')
+            IMAGE_TAG="ghcr.io/${OWNER}/vulnflow:${SANITIZED_BRANCH}"
+          fi
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
+          echo "Target image tag: ${IMAGE_TAG}"
 
       - name: Build and Push Docker Image
         id: docker_build
