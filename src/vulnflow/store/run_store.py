@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -82,9 +83,18 @@ class RunStore:
 
         try:
             self.base_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                os.chmod(self.base_dir.parent, 0o755)
+                os.chmod(self.base_dir, 0o755)
+            except OSError:
+                pass
             run_file = self.base_dir / f"{state.run_id}.json"
             with open(run_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
+            try:
+                os.chmod(run_file, 0o644)
+            except OSError:
+                pass
         except (OSError, TypeError, ValueError) as exc:
             logger.warning("Could not persist run to disk: %s", exc)
 

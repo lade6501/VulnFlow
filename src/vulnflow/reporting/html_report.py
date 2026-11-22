@@ -194,15 +194,27 @@ def write_html_report(
     """Atomically persist self-contained HTML."""
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(out.parent, 0o755)
+    except OSError:
+        pass
     descriptor, temp_name = tempfile.mkstemp(
         prefix=f".{out.name}.", dir=out.parent, text=True
     )
     try:
+        try:
+            os.fchmod(descriptor, 0o644)
+        except (OSError, AttributeError):
+            pass
         with os.fdopen(descriptor, "w", encoding="utf-8") as target:
             target.write(generate_html_report(report))
             target.flush()
             os.fsync(target.fileno())
         os.replace(temp_name, out)
+        try:
+            os.chmod(out, 0o644)
+        except OSError:
+            pass
     except BaseException:
         try:
             os.unlink(temp_name)

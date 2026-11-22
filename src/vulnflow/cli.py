@@ -336,10 +336,19 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     audit_dir = Path(env_audit) if env_audit else (repo_base / ".vulnflow" / "audit")
     try:
         audit_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(audit_dir.parent, 0o755)
+            os.chmod(audit_dir, 0o755)
+        except OSError:
+            pass
         if result.audit_events:
             audit_file = audit_dir / f"audit_{result.run_id}.jsonl"
             with open(audit_file, "w", encoding="utf-8") as f:
                 f.writelines(json.dumps(ev) + "\n" for ev in result.audit_events)
+            try:
+                os.chmod(audit_file, 0o644)
+            except OSError:
+                pass
     except (OSError, TypeError) as exc:
         logger.debug("Could not write audit events to %s: %s", audit_dir, exc)
 
@@ -577,7 +586,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     try:
         try:
-            import uvicorn
+            import uvicorn  # type: ignore[import-not-found]
             uvicorn.run("api.main:app", host=host, port=port, reload=reload_backend)
         except ImportError:
             print("ℹ️  Running on built-in multi-threaded HTTP server (zero pip packages required).")
