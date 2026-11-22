@@ -20,6 +20,10 @@ def _escape(value: object) -> str:
     return html.escape(str(value if value is not None else "UNKNOWN"), quote=True)
 
 
+def _count(value: object) -> str:
+    return "UNKNOWN" if value is None else str(value)
+
+
 def _canonical(report: RunReport | VulnFlowState) -> RunReport:
     return report if isinstance(report, RunReport) else build_run_report(report)
 
@@ -155,6 +159,44 @@ def generate_html_report(report: RunReport | VulnFlowState) -> str:
         + list(snapshot.validation_notes.incomplete_execution)
         + list(snapshot.validation_notes.unsupported_claims)
     )
+
+    prs_section = ""
+    if snapshot.pull_requests:
+        pr_rows = "".join(
+            f'<tr><td>#{pr.pr_number or "N/A"}</td><td><a href="{_escape(pr.pr_url)}">{_escape(pr.title or "Remediation PR")}</a></td>'
+            f"<td><code>{_escape(pr.branch)}</code></td><td>{_escape(', '.join(pr.affected_packages))}</td>"
+            f"<td>{_escape(pr.status)}</td></tr>"
+            for pr in snapshot.pull_requests
+        )
+        prs_section = f'<section><h2>Created Pull Requests</h2><div class="table-wrap"><table><thead><tr><th>PR #</th><th>Title</th><th>Branch</th><th>Packages</th><th>Status</th></tr></thead><tbody>{pr_rows}</tbody></table></div></section>'
+
+    patches_section = ""
+    if snapshot.applied_patches:
+        patch_rows = "".join(
+            f"<tr><td>{_escape(p.target_package)}</td><td><code>{_escape(p.file_path)}</code></td>"
+            f"<td>{_escape(p.status)}</td><td>+{_count(p.lines_added)} / -{_count(p.lines_removed)}</td></tr>"
+            for p in snapshot.applied_patches
+        )
+        patches_section = f'<section><h2>Applied Remediation Patches</h2><div class="table-wrap"><table><thead><tr><th>Package</th><th>File</th><th>Status</th><th>Lines (+/-)</th></tr></thead><tbody>{patch_rows}</tbody></table></div></section>'
+
+    campaigns_section = ""
+    if snapshot.remediation_campaigns:
+        camp_rows = "".join(
+            f"<tr><td>{_escape(c.campaign_id)}</td><td>{_escape(c.title)}</td><td><code>{_escape(c.branch)}</code></td>"
+            f"<td>{c.plans_count}</td><td>{_escape(c.status)}</td></tr>"
+            for c in snapshot.remediation_campaigns
+        )
+        campaigns_section = f'<section><h2>Remediation Campaigns</h2><div class="table-wrap"><table><thead><tr><th>Campaign ID</th><th>Title</th><th>Branch</th><th>Plans</th><th>Status</th></tr></thead><tbody>{camp_rows}</tbody></table></div></section>'
+
+    approval_groups_section = ""
+    if snapshot.approval_groups:
+        group_rows = "".join(
+            f"<tr><td><strong>{_escape(g.title)}</strong></td><td>{g.plans_count}</td><td>{_escape(g.description)}</td>"
+            f"<td>{_escape(g.recommended_action)}</td><td><code>{_escape(g.cli_command)}</code></td></tr>"
+            for g in snapshot.approval_groups
+        )
+        approval_groups_section = f'<section><h2>Prioritized Approval Groups</h2><div class="table-wrap"><table><thead><tr><th>Group</th><th>Plans</th><th>Description</th><th>Action</th><th>CLI Command</th></tr></thead><tbody>{group_rows}</tbody></table></div></section>'
+
     content = f"""
 <header class="report-header"><div><p class="eyebrow">VulnFlow Enterprise Security</p><h1>Run report</h1></div>
 <div class="outcome"><span>Outcome</span><strong>{_escape(snapshot.header.outcome)}</strong></div></header>
@@ -167,6 +209,10 @@ def generate_html_report(report: RunReport | VulnFlowState) -> str:
 <div><strong>{summary.expected_cves_addressed}</strong><span>Expected CVEs</span></div><div><strong>{summary.verified_cves_resolved}</strong><span>Verified CVEs</span></div>
 <div><strong>{summary.fixes_applied}</strong><span>Applied fixes</span></div><div><strong>{summary.prs_actually_created}</strong><span>Created PRs</span></div></div></section>
 <section><h2>Before/after vulnerability posture</h2>{_severity_svg(snapshot)}</section>
+{prs_section}
+{patches_section}
+{campaigns_section}
+{approval_groups_section}
 <section><h2>Immediate actions required</h2><div class="table-wrap"><table><thead><tr><th>Priority</th><th>Action</th><th>Description</th><th>Actor</th><th>Status</th></tr></thead>
 <tbody>{actions or '<tr><td colspan="5">No immediate action recorded.</td></tr>'}</tbody></table></div></section>
 <section><h2>AI security intelligence</h2><p>Rule-derived facts and AI-sourced narrative are labeled with evidence availability and sources.</p></section>
