@@ -8,21 +8,23 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import sys
 import os
+import sys
 from pathlib import Path
+from typing import Any
 
 # Ensure src root is on sys.path when invoked directly
 src_dir = str(Path(__file__).resolve().parent.parent)
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
-from vulnflow.core import dotenv
 from vulnflow.agents.planner import default_planner_agent
 from vulnflow.contracts.state import VulnFlowState
 from vulnflow.core import console
 from vulnflow.observability.langsmith_tracer import langsmith_tracer
 from vulnflow.orchestrator.graph import run_workflow
+from vulnflow.reporting.builder import build_run_report
+from vulnflow.reporting.html_report import write_html_report
 from vulnflow.reporting.json_report import write_json_report
 from vulnflow.reporting.markdown import write_markdown_report
 from vulnflow.store.run_store import default_run_store
@@ -31,9 +33,58 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger("vulnflow.cli")
 
 
+def _requested_report_formats(args: argparse.Namespace) -> list[str]:
+    """Resolve new multi-format and legacy single-format CLI options."""
+    legacy_format = getattr(args, "format", None)
+    if legacy_format:
+        return ["md" if legacy_format == "markdown" else legacy_format]
+    raw = getattr(args, "output_format", None) or "html,md,json"
+    aliases = {"markdown": "md", "htm": "html"}
+    formats: list[str] = []
+    for item in str(raw).split(","):
+        normalized = aliases.get(item.strip().lower(), item.strip().lower())
+        if normalized in {"html", "md", "json"} and normalized not in formats:
+            formats.append(normalized)
+    return formats or ["html", "md", "json"]
+
+
+def _write_run_reports(result: VulnFlowState, args: argparse.Namespace) -> list[Path]:
+    """Build one immutable snapshot and isolate failures from workflow exit status."""
+    try:
+        snapshot = build_run_report(result)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Run report snapshot could not be built: %s", exc)
+        return []
+
+    legacy_output = getattr(args, "output", None)
+    if legacy_output:
+        path = Path(legacy_output)
+        suffix = path.suffix.lower()
+        report_format = "json" if suffix == ".json" else "html" if suffix in {".html", ".htm"} else "md"
+        targets = [(report_format, path)]
+    else:
+        base = Path(getattr(args, "out_dir", None) or "vulnflow-report") / result.run_id
+        names = {"json": "run-report.json", "html": "report.html", "md": "report.md"}
+        targets = [(item, base / names[item]) for item in _requested_report_formats(args)]
+
+    writers = {"json": write_json_report, "html": write_html_report, "md": write_markdown_report}
+    written: list[Path] = []
+    for report_format, path in targets:
+        try:
+            written.append(writers[report_format](snapshot, path))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not write %s run report to %s: %s", report_format, path, exc)
+    return written
+
+
 def _print_execution_summary(result: VulnFlowState) -> None:
     """Print structured, developer-friendly, colorful execution report to stdout."""
     width = 72
+    try:
+        report_snapshot = build_run_report(result)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not build evidence snapshot for console summary: %s", exc)
+        report_snapshot = None
     print("\n" + console.box_header(f"🛡️  VulnFlow Execution Summary  [Run: {result.run_id}]", width=width))
 
     pending_cnt = (
@@ -48,8 +99,10 @@ def _print_execution_summary(result: VulnFlowState) -> None:
     print(f"  {console.gray('Discovered:')}       {console.bold(str(len(result.findings)))} raw findings ({console.green(str(len(result.deduped_findings)))} unique deduped)")
     print(f"  {console.gray('Root Causes:')}      {console.cyan(console.bold(str(len(result.root_cause_groups))))} dependency cluster(s)")
     print(f"  {console.gray('Remediations:')}     {console.yellow(console.bold(str(len(result.plans))))} plans generated ({console.green(str(len(result.approved_plans)))} approved, {console.yellow(str(pending_cnt))} pending review)")
-    print(f"  {console.gray('Patches Applied:')}  {console.cyan(console.bold(str(len(result.patches))))}")
-    print(f"  {console.gray('Pull Requests:')}    {console.green(console.bold(str(len(result.pull_requests))))} opened")
+    applied_count = report_snapshot.executive_summary.fixes_applied if report_snapshot else 0
+    pr_count = report_snapshot.executive_summary.prs_actually_created if report_snapshot else 0
+    print(f"  {console.gray('Patches Applied:')}  {console.cyan(console.bold(str(applied_count)))}")
+    print(f"  {console.gray('Pull Requests:')}    {console.green(console.bold(str(pr_count)))} opened")
 
     # 1. Pending approval warning
     if result.terminal_status == "pending_approval" or (getattr(result, "pending_approval_plans", None) and not result.approved_plans):
@@ -106,7 +159,7 @@ def _print_execution_summary(result: VulnFlowState) -> None:
                 print(f"        {console.dim(line)}")
 
     # 5. Pull Requests Opened
-    if result.pull_requests:
+    if result.mode == "pr" and pr_count and result.pull_requests:
         print(console.section_divider("🚀 Opened Pull Request(s)", width=width, color_fn=console.green))
         for pr in result.pull_requests:
             title = pr.get("title", "Pull Request")
@@ -117,10 +170,19 @@ def _print_execution_summary(result: VulnFlowState) -> None:
             print(f"    {console.gray('PR URL:')} {console.blue(console.underline(url))}")
 
     # 6. Verification
-    if result.verification_results:
+    if result.verification_results and report_snapshot:
+        evidence = report_snapshot.execution_evidence
         ver = result.verification_results[0]
-        clean = console.green("✔ RESOLVED (0 remaining vulnerabilities)") if ver.get("rescan_clean") else console.yellow("⚠ RESIDUAL FINDINGS REMAIN")
-        tests = console.green("✔ PASSED") if ver.get("tests_passed") else console.red("✖ FAILED")
+        if evidence.rescan.value == "executed":
+            clean = console.green("✔ RESOLVED (0 remaining vulnerabilities)") if ver.get("rescan_clean") else console.yellow("⚠ RESIDUAL FINDINGS REMAIN")
+        else:
+            clean = console.yellow("UNKNOWN (no executed rescan evidence)")
+        if evidence.tests.value == "executed":
+            tests = console.green("✔ PASSED")
+        elif evidence.tests.value == "failed":
+            tests = console.red("✖ FAILED")
+        else:
+            tests = console.yellow("UNKNOWN (no executed test evidence)")
         print(console.section_divider("🧪 Verification & Build Evidence", width=width))
         print(f"  • {console.gray('Sandbox Test Suite:')}  {tests}")
         print(f"  • {console.gray('Rescan Verification:')} {clean}")
@@ -191,7 +253,7 @@ def _detect_scanner_format(report_path: str) -> str:
                 return "trivy"
             if '"vulnerabilities"' in snippet and "snyk" in snippet.lower():
                 return "snyk"
-        except Exception:
+        except (OSError, UnicodeDecodeError):
             pass
     return "trivy"
 
@@ -260,26 +322,14 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     default_run_store.save_run(result)
     _print_execution_summary(result)
 
-    # Export report to disk
-    out_arg = getattr(args, "output", None)
-    out_format = getattr(args, "format", "markdown")
+    # Export all renderers from one immutable evidence snapshot. Failures do not alter exit_code.
+    written_reports = _write_run_reports(result, args)
+    for report_path in written_reports:
+        print(f"Report written to: {report_path}")
+    if written_reports:
+        print()
 
     repo_base = Path(args.repo) if getattr(args, "repo", None) and str(args.repo) != "." else Path(".")
-    env_rep = os.environ.get("VULNFLOW_REPORTS_DIR")
-    if out_arg:
-        out_path = Path(out_arg)
-    else:
-        reports_dir = Path(env_rep) if env_rep else (repo_base / ".vulnflow" / "reports")
-        reports_dir.mkdir(parents=True, exist_ok=True)
-        ext = "json" if out_format == "json" else "md"
-        out_path = reports_dir / f"report_{result.run_id}.{ext}"
-
-    if str(out_path).endswith(".json") or out_format == "json":
-        write_json_report(result, out_path)
-        print(f"📄 Structured JSON report written to: {out_path}\n")
-    else:
-        write_markdown_report(result, out_path)
-        print(f"📄 Executive Markdown report written to: {out_path}\n")
 
     # Also persist audit events into repo_base/.vulnflow/audit
     env_audit = os.environ.get("VULNFLOW_AUDIT_DIR")
@@ -289,9 +339,8 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         if result.audit_events:
             audit_file = audit_dir / f"audit_{result.run_id}.jsonl"
             with open(audit_file, "w", encoding="utf-8") as f:
-                for ev in result.audit_events:
-                    f.write(json.dumps(ev) + "\n")
-    except Exception as exc:
+                f.writelines(json.dumps(ev) + "\n" for ev in result.audit_events)
+    except (OSError, TypeError) as exc:
         logger.debug("Could not write audit events to %s: %s", audit_dir, exc)
 
     # Ensure all LangSmith traces are flushed before exit
@@ -369,10 +418,11 @@ def cmd_approve(args: argparse.Namespace) -> int:
 def cmd_audit(args: argparse.Namespace) -> int:
     """Inspect and trace audit events for a given run."""
     import datetime
+
     from vulnflow.observability.audit_log import audit_logger
 
     run_id = args.run_id
-    events: List[Dict[str, Any]] = []
+    events: list[dict[str, Any]] = []
 
     # 1. Search in-memory events
     mem_events = audit_logger.get_events(run_id)
@@ -395,7 +445,7 @@ def cmd_audit(args: argparse.Namespace) -> int:
                     for line in fp:
                         if line.strip():
                             events.append(json.loads(line))
-            except Exception as exc:
+            except (OSError, json.JSONDecodeError) as exc:
                 logger.warning("Could not read audit file %s: %s", f, exc)
 
     if not events:
@@ -418,7 +468,7 @@ def cmd_audit(args: argparse.Namespace) -> int:
             continue
         seen.add(key)
 
-        dt_str = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc).strftime("%H:%M:%S.%f")[:-3]
+        dt_str = datetime.datetime.fromtimestamp(ts, tz=datetime.UTC).strftime("%H:%M:%S.%f")[:-3]
         print(f"[{counter:02d}] {dt_str} | {ev_type:<26} | by {actor:<15}")
         payload = e.get("payload", {})
         if payload:
@@ -488,7 +538,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         try:
             subprocess.run([npm_cmd, "run", "build"], cwd=str(ui_dir), check=True, shell=use_shell)
             print("✅ Frontend dashboard built successfully.\n")
-        except Exception as exc:
+        except (subprocess.SubprocessError, OSError) as exc:
             logger.warning("Could not build frontend bundle: %s", exc)
 
     vite_proc = None
@@ -498,7 +548,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         env["VITE_API_BASE_URL"] = f"http://localhost:{port}"
         try:
             vite_proc = subprocess.Popen([npm_cmd, "run", "dev"], cwd=str(ui_dir), env=env, shell=use_shell)
-        except Exception as exc:
+        except (subprocess.SubprocessError, OSError) as exc:
             logger.warning("Could not start Vite dev process: %s", exc)
 
     target_url = "http://localhost:5173" if (dev_mode and vite_proc) else f"http://localhost:{port}"
@@ -542,7 +592,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
             vite_proc.terminate()
             try:
                 vite_proc.wait(timeout=3)
-            except Exception:
+            except (subprocess.SubprocessError, OSError):
                 vite_proc.kill()
 
     return 0
@@ -571,7 +621,9 @@ Attributes & Options for scan / analyze / report:
   --ecosystem {npm,maven,pip}
                             Primary package ecosystem (default: npm)
   --output, -o PATH         Destination file path to save report (e.g. report.md, report.json)
-  --format {markdown,json}  Report format to write to disk (default: markdown)
+  --output-format FORMATS   Comma-separated html,md,json (default: html,md,json)
+  --out-dir PATH            Output root (default: ./vulnflow-report/<run-id>/)
+  --format {markdown,json}  Legacy single-format option
   --auto-approve            Auto-approve review-tier plans without waiting for human sign-off
   --no-llm                  Skip remote LLM calls and use fast deterministic rule planner
   --langsmith               Enable LangSmith distributed tracing
@@ -602,7 +654,7 @@ Quick Recipes:
 """
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="vulnflow",
         description="🛡️ VulnFlow AI - Autonomous Vulnerability Remediation & Security Fabric",
@@ -636,7 +688,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_scan.add_argument("--mode", choices=["report", "pr", "dry-run"], default="pr", help="Execution mode (default: pr)")
     p_scan.add_argument("--ecosystem", default="npm", help="Primary package ecosystem (npm, maven)")
     p_scan.add_argument("--output", "-o", help="File path to save the generated report")
-    p_scan.add_argument("--format", choices=["markdown", "json"], default="markdown", help="Report format")
+    p_scan.add_argument("--format", choices=["markdown", "json"], default=None, help="Legacy single report format")
+    p_scan.add_argument("--output-format", default="html,md,json", help="Comma-separated report formats: html,md,json")
+    p_scan.add_argument("--out-dir", help="Report output root (default: ./vulnflow-report)")
     p_scan.add_argument("--no-llm", action="store_true", help="Skip remote LLM calls and use fast deterministic planner")
     p_scan.add_argument("--auto-approve", action="store_true", help="Auto-approve review-tier plans without waiting for human sign-off")
     p_scan.add_argument("--langsmith", action="store_true", help="Enable LangSmith distributed tracing")
@@ -652,7 +706,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_analyze.add_argument("--mode", choices=["report", "pr", "dry-run"], default="pr", help="Execution mode (default: pr)")
     p_analyze.add_argument("--ecosystem", default="npm", help="Primary package ecosystem (npm, maven)")
     p_analyze.add_argument("--output", "-o", help="File path to save the generated report (e.g., report.md or report.json)")
-    p_analyze.add_argument("--format", choices=["markdown", "json"], default="markdown", help="Report format")
+    p_analyze.add_argument("--format", choices=["markdown", "json"], default=None, help="Legacy single report format")
+    p_analyze.add_argument("--output-format", default="html,md,json", help="Comma-separated report formats: html,md,json")
+    p_analyze.add_argument("--out-dir", help="Report output root (default: ./vulnflow-report)")
     p_analyze.add_argument("--no-llm", action="store_true", help="Skip remote LLM calls and use fast deterministic planner")
     p_analyze.add_argument("--auto-approve", action="store_true", help="Auto-approve review-tier plans without waiting for human sign-off")
     p_analyze.add_argument("--langsmith", action="store_true", help="Enable LangSmith distributed tracing")
@@ -667,7 +723,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_report.add_argument("--scanner", default=None, help="Security scanner name (auto-detected if --report is provided; defaults to trivy)")
     p_report.add_argument("--ecosystem", default="npm", help="Package ecosystem")
     p_report.add_argument("--output", "-o", help="File path to save the generated report")
-    p_report.add_argument("--format", choices=["markdown", "json"], default="markdown", help="Report format")
+    p_report.add_argument("--format", choices=["markdown", "json"], default=None, help="Legacy single report format")
+    p_report.add_argument("--output-format", default="html,md,json", help="Comma-separated report formats: html,md,json")
+    p_report.add_argument("--out-dir", help="Report output root (default: ./vulnflow-report)")
     p_report.add_argument("--no-llm", action="store_true", help="Skip remote LLM calls and use fast deterministic planner")
     p_report.set_defaults(func=cmd_report)
 

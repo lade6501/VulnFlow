@@ -41,6 +41,8 @@ def route_after_test(state: VulnFlowState) -> str:
     """Route test results: proceed to PR creation, retry fix, or escalate to exception."""
     has_failures = any(not r.get("build_clean", True) or not r.get("passed", True) for r in state.test_results)
     if not has_failures:
+        if state.mode == "dry-run":
+            return "verify"
         return "pr"
 
     if state.retry_count < state.max_retries:

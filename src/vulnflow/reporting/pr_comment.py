@@ -5,15 +5,13 @@ Formats concise pull request comments summarizing remediation actions taken.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-
 from vulnflow.contracts.remediation_plan import RemediationPlan, VerificationResult
 
 
 def format_pr_body(
     plan: RemediationPlan,
-    verification: Optional[VerificationResult] = None,
-    repo_url: Optional[str] = None,
+    verification: VerificationResult | None = None,
+    repo_url: str | None = None,
 ) -> str:
     """
     Format a rich, structured Markdown description for a remediation pull request.
@@ -23,26 +21,26 @@ def format_pr_body(
     resolved_count = len(plan.finding_ids)
 
     body_lines = [
-        f"## 🛡️ VulnFlow Automated Remediation",
-        f"",
-        f"### Summary of Changes",
-        f"| Attribute | Value |",
-        f"|---|---|",
+        "## 🛡️ VulnFlow Automated Remediation",
+        "",
+        "### Summary of Changes",
+        "| Attribute | Value |",
+        "|---|---|",
         f"| **Target Dependency** | `{plan.target_package or plan.root_cause_id}` |",
         f"| **Action** | `{plan.action.value.upper()}` |",
         f"| **New Version** | `{plan.target_version or 'N/A'}` |",
         f"| **Risk Tier** | `{plan.risk_tier.value.upper()}` |",
         f"| **Policy Status** | `{plan.policy_result.status.upper()}` (`{plan.policy_result.rule_matched or 'standard'}`) |",
         f"| **Resolved Findings** | `{resolved_count}` finding(s) |",
-        f"",
-        f"### 📋 Rationale",
+        "",
+        "### 📋 Rationale",
         f"> {plan.rationale}",
-        f"",
+        "",
     ]
 
     if plan.evidence:
         body_lines.extend([
-            f"### 🔍 Security Intelligence & Advisories",
+            "### 🔍 Security Intelligence & Advisories",
         ])
         for ev in plan.evidence:
             title = ev.get("title") or ev.get("id") or "Advisory"
@@ -57,16 +55,16 @@ def format_pr_body(
         test_status = "✅ PASSED" if ver.tests_passed else "❌ FAILED"
         clean_status = "✅ ZERO REMAINING FINDINGS" if ver.rescan_clean else "⚠️ PARTIAL RESOLUTION"
         body_lines.extend([
-            f"### 🧪 Verification & Build Evidence",
+            "### 🧪 Verification & Build Evidence",
             f"- **Sandbox Tests**: {test_status}",
             f"- **Rescan Verification**: {clean_status}",
             f"- **Policy Recheck**: {'✅ PASSED' if ver.policy_recheck_passed else '❌ FAILED'}",
-            f"",
+            "",
         ])
 
     body_lines.extend([
-        f"---",
-        f"*Generated automatically by [VulnFlow](https://github.com/vulnflow/vulnflow). No human intervention was required.*",
+        "---",
+        "*Generated automatically by [VulnFlow](https://github.com/vulnflow/vulnflow). No human intervention was required.*",
     ])
 
     return "\n".join(body_lines)

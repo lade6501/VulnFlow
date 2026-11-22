@@ -1,214 +1,186 @@
 """
 src/vulnflow/reporting/markdown.py
-Generates formatted Markdown remediation summaries and executive reports grouped by root cause.
+Renders a safe, concise reviewer report from the canonical snapshot.
 """
 
 from __future__ import annotations
 
-import datetime
+import os
+import re
+import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
 
+from vulnflow.contracts.report import RunReport
 from vulnflow.contracts.state import VulnFlowState
+from vulnflow.reporting.builder import build_run_report
+
+_MARKDOWN_META = re.compile(r"([\\`*_{}\[\]()<>#+.!|>-])")
 
 
-def generate_markdown_report(state: VulnFlowState) -> str:
-    """
-    Format an executive Markdown report from workflow state.
-    Groups findings by root cause parent and displays policy evaluation and risk tiers.
-    """
-    now_iso = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    lines: List[str] = [
-        f"# 🛡️ VulnFlow Vulnerability Remediation Report",
-        f"",
-        f"**Run ID**: `{state.run_id}`  ",
-        f"**Generated**: `{now_iso}`  ",
-        f"**Repository**: `{state.repo_path}`  ",
-        f"**Execution Mode**: `{state.mode.upper()}`  ",
-        f"**Final Status**: `{state.terminal_status.upper()}` (Exit Code: `{state.exit_code}`)  ",
-        f"",
+def escape_markdown(value: object) -> str:
+    """Neutralize Markdown syntax, directives, links, and user mentions."""
+    text = str(value or "").replace("@", "@\u200b")
+    text = text.replace("\r", " ").replace("\n", " ")
+    return _MARKDOWN_META.sub(r"\\\1", text)
+
+
+def _canonical(report: RunReport | VulnFlowState) -> RunReport:
+    return report if isinstance(report, RunReport) else build_run_report(report)
+
+
+def _count(value: object) -> str:
+    return "UNKNOWN" if value is None else str(value)
+
+
+def generate_markdown_report(
+    report: RunReport | VulnFlowState, *, html_name: str = "report.html"
+) -> str:
+    """Render a bounded Markdown summary containing no untrusted Markdown structure."""
+    snapshot = _canonical(report)
+    header = snapshot.header
+    summary = snapshot.executive_summary
+    lines = [
+        "# VulnFlow Enterprise Run Report",
+        "",
+        "## Outcome",
+        "",
+        (
+            f"Run `{escape_markdown(header.run_id)}` finished as **{escape_markdown(header.outcome)}** "
+            f"with exit code `{header.exit_code}` in `{header.execution_mode.value}` mode."
+        ),
+        f"Repository files changed: **{header.repo_changes.value}**.",
+        "",
+        "## Summary of findings and risk",
+        "",
+        escape_markdown(summary.summary_sentence),
+        "",
+        "| Metric | Value |",
+        "| --- | ---: |",
+        f"| Findings analyzed | {summary.findings_analyzed} |",
+        f"| Root causes | {summary.root_causes_identified} |",
+        f"| Expected CVEs addressed | {summary.expected_cves_addressed} |",
+        f"| Verified CVEs resolved | {summary.verified_cves_resolved} |",
+        f"| Fixes applied | {summary.fixes_applied} |",
+        f"| PRs actually created | {summary.prs_actually_created} |",
+        f"| Unresolved findings | {_count(summary.unresolved_findings)} |",
+        "",
+        "## Action required",
+        "",
     ]
-
-    # Prominent warning explanation if run is paused for human approval
-    pending_plans = getattr(state, "pending_approval_plans", []) or [p for p in state.plans if p.requires_approval and p not in state.approved_plans]
-    if state.terminal_status == "pending_approval" or (pending_plans and not state.approved_plans):
-        lines.extend([
-            f"> [!WARNING]",
-            f"> ### ⚠️ Human Security Approval Required (Exit Code: 10)",
-            f"> **Status**: {len(pending_plans)} remediation plan(s) require human authorization before PR creation.  ",
-            f"> **Safeguard Enforcement**: Pull request opening is withheld until authorized by security.  ",
-            f"> ",
-            f"> **Plans Awaiting Security Authorization**:",
-        ])
-        for p in pending_plans[:6]:
-            pol_s = p.policy_result.status.upper() if p.policy_result else "UNKNOWN"
-            reason_s = p.policy_result.reason if p.policy_result else "Review-tier remediation requiring security authorization."
-            target_str = p.target_package or p.root_cause_id
-            lines.append(f"> - **Plan ID**: `{p.id}` (`{target_str}`)")
-            lines.append(f">   • **Proposed Action**: `{p.action.value.upper()}` ➔ `{p.target_version or 'N/A'}` (Risk Tier: `{p.risk_tier.value.upper()}`)")
-            lines.append(f">   • **Reason**: {reason_s}")
-            lines.append(f">   • **To Approve & Resume**: `vulnflow approve --plan-id {p.id} --reviewer \"<your-email>\" --resume --repo {state.repo_path}`")
-            lines.append(f"> ")
-        if len(pending_plans) > 6:
-            lines.append(f"> - *... and {len(pending_plans) - 6} additional plan(s)*")
-        lines.extend([
-            f"> **How to Authorize**:",
-            f"> 1. **Via CLI**: Run the approval commands above with `--resume` to trigger PR creation.",
-            f"> 2. **Via Web Dashboard**: Open the Plan Approvals UI and click **Approve**.",
-            f"> 3. **Non-Interactive CI**: Re-run with `--auto-approve` to bypass the human gate in trusted CI.",
-            f"",
-        ])
-    elif state.terminal_status == "blocked_policy" or state.blocking_reason or state.exception_ticket:
-        t_id = state.exception_ticket.get("ticket_id", "SEC-UNKNOWN") if state.exception_ticket else "SEC-ESCALATED"
-        t_url = state.exception_ticket.get("ticket_url", "#") if state.exception_ticket else "#"
-        reason = state.blocking_reason or "Automated execution blocked by policy or build safety checks."
-
-        lines.extend([
-            f"> [!CAUTION]",
-            f"> ### 🛑 Execution Blocked: Policy Exception Escalated",
-            f"> **Reason**: {reason}  ",
-            f"> **Safeguard Enforcement**: Pull request creation was safely halted to prevent pushing broken or unapproved changes to production.  ",
-            f"> **Security Ticket**: [{t_id}]({t_url})  ",
-            f"> ",
-            f"> **Resolution Guidance**:",
-            f"> 1. **Inspect Test/Build Output**: If tests failed, review local test runs (`npm test` / `pytest`) on the target fix branch.",
-            f"> 2. **Review Policy Compliance**: If unlisted or banned, request exception sign-off via the security ticket linked above.",
-            f"> 3. **Manual Resolution**: Run `vulnflow fix --plan-id <ID>` once approved.",
-            f"",
-        ])
-
-    pending_count = len(pending_plans)
-    lines.extend([
-        f"---",
-        f"",
-        f"## 📊 Executive Summary",
-        f"",
-        f"| Metric | Count / Value |",
-        f"|---|---|",
-        f"| **Raw Scanner Findings** | {len(state.findings)} |",
-        f"| **Unique Deduplicated Findings** | {len(state.deduped_findings)} |",
-        f"| **Root Cause Dependency Groups** | {len(state.root_cause_groups)} |",
-        f"| **Remediation Plans Generated** | {len(state.plans)} ({len(state.approved_plans)} approved, {pending_count} pending review) |",
-        f"| **Patches Applied** | {len(state.patches)} |",
-        f"| **Pull Requests Opened** | {len(state.pull_requests)} |",
-        f"",
-        f"---",
-        f"",
-        f"## 🔍 Findings Grouped by Root Cause",
-        f"",
-    ])
-
-    if not state.root_cause_groups:
-        lines.append("*No vulnerability findings discovered.*")
-        lines.append("")
-    else:
-        for idx, grp in enumerate(state.root_cause_groups, 1):
-            rc_id = grp.get("root_cause_id", "Unknown")
-            rc_pkg = grp.get("root_cause_package", rc_id.replace("PKG-", ""))
-            is_direct = grp.get("is_direct", True)
-            origin_type = "Direct Manifest Dependency" if is_direct else "Transitive Sub-Dependency"
-            explanation = grp.get("explanation", "Root cause identified through dependency graph.")
-
-            # Match associated plan
-            matched_plan = next(
-                (p for p in state.plans if p.root_cause_id == rc_id or rc_id in p.root_cause_id or p.root_cause_id in rc_id),
-                None,
+    if snapshot.action_required:
+        for action in snapshot.action_required:
+            target = (
+                f" for {escape_markdown(action.target_root_cause)}"
+                if action.target_root_cause
+                else ""
             )
-            tier_str = matched_plan.risk_tier.value.upper() if matched_plan else "N/A"
-            action_str = matched_plan.action.value.upper() if matched_plan else "N/A"
-            target_v = matched_plan.target_version or "N/A" if matched_plan else "N/A"
-            pol_status = matched_plan.policy_result.status.upper() if matched_plan and matched_plan.policy_result else "APPROVED"
-
-            rationale_text = matched_plan.rationale if matched_plan and matched_plan.rationale else "No specific remediation plan generated."
-            approval_note = "Requires Human Authorization" if (matched_plan and matched_plan.requires_approval) else "Automated Bump Eligible"
-
-            plan_id_str = matched_plan.id if matched_plan else "N/A"
-            lines.extend([
-                f"### Root Cause #{idx}: `{rc_pkg}`",
-                f"",
-                f"- **Remediation Plan ID**: `{plan_id_str}`",
-                f"- **Origin**: {origin_type}",
-                f"- **Proposed Action**: `{action_str}` ➔ Target Version: `{target_v}`",
-                f"- **Risk Tier**: `{tier_str}` ({approval_note})",
-                f"- **Policy Evaluation**: `{pol_status}`",
-                f"- **Root Cause Analysis**: {explanation}",
-            ])
-            if matched_plan and matched_plan.requires_approval:
-                lines.append(f"- **Approval CLI Command**: `vulnflow approve --plan-id {matched_plan.id} --reviewer \"<your-email>\" --resume --repo {state.repo_path}`")
-            lines.extend([
-                f"",
-                f"#### 🧠 AI Remediation Proposal & Guidance (Plan ID: `{plan_id_str}`):",
-                f"",
-            ])
-            for rat_line in rationale_text.split("\n"):
-                lines.append(f"> {rat_line}" if rat_line.strip() else ">")
-            lines.extend([
-                f"",
-                f"#### Clustered Findings ({len(grp.get('findings', []))} CVEs resolved by this proposal):",
-                f"",
-                f"| Package | Installed | Severity | CVE IDs | Fix Versions |",
-                f"|---|---|---|---|---|",
-            ])
-
-            for f in grp.get("findings", []):
-                pkg = f.get("package", "")
-                ver = f.get("version", "")
-                sev = f.get("severity", "MEDIUM")
-                sev_val = sev.value.upper() if hasattr(sev, "value") else str(sev).upper()
-                cves = ", ".join(f.get("cve", [])) or "N/A"
-                fixes = ", ".join(f.get("fix_versions", [])) or "None"
-                lines.append(f"| `{pkg}` | `{ver}` | **{sev_val}** | {cves} | `{fixes}` |")
-
-            if target_v != "N/A" and action_str in ("BUMP", "REPLACE"):
-                lines.extend([
-                    f"",
-                    f"> 💡 **Actionable Developer Step**: Update `{rc_pkg}` to `{target_v}` in repository manifest. Execute automated test suite to verify backward compatibility prior to production merge.",
-                ])
-
-            lines.append("")
-
-    # Pull Requests Section
-    if state.pull_requests:
-        lines.extend([
-            f"---",
-            f"",
-            f"## 🚀 Opened Pull Requests",
-            f"",
-        ])
-        for pr in state.pull_requests:
-            lines.append(f"- **{pr.get('title')}**")
-            lines.append(f"  - **URL**: [{pr.get('pr_url')}]({pr.get('pr_url')})")
-            lines.append(f"  - **Branch**: `{pr.get('branch')}`")
-        lines.append("")
-
-    # Verification Section
-    if state.verification_results:
-        ver = state.verification_results[0]
-        rescan_status = "✅ Clean (0 residual findings)" if ver.get("rescan_clean") else "⚠️ Residual findings remain"
-        tests_status = "✅ PASSED" if ver.get("tests_passed") else "❌ FAILED"
-        lines.extend([
-            f"---",
-            f"",
-            f"## 🧪 Verification & Evidence",
-            f"- **Sandbox Tests**: {tests_status}",
-            f"- **Post-Fix Rescan**: {rescan_status}",
-            f"- **Policy Recheck**: {'✅ PASSED' if ver.get('policy_recheck_passed') else '❌ FAILED'}",
-            f"",
-        ])
-
-    lines.extend([
-        f"---",
-        f"*Generated automatically by [VulnFlow](https://github.com/vulnflow/vulnflow).*",
-    ])
-
-    return "\n".join(lines)
+            lines.append(
+                f"- **{escape_markdown(action.priority)}**: {escape_markdown(action.description)}"
+                f"{target} — actor: `{escape_markdown(action.required_actor)}`; "
+                f"status: `{action.completion_status.value}`."
+            )
+    else:
+        lines.append("- No immediate action is recorded.")
+    lines.extend(["", "## Root-cause remediation summaries", ""])
+    for root in snapshot.root_causes:
+        lines.extend(
+            [
+                f"### {escape_markdown(root.package)}",
+                "",
+                (
+                    f"- Origin: `{root.origin.value}`; installed: "
+                    f"`{escape_markdown(root.installed_version or 'UNKNOWN')}`; target: "
+                    f"`{escape_markdown(root.target_version or 'UNKNOWN')}`."
+                ),
+                f"- Findings/CVEs: `{len(root.associated_finding_ids)}` / `{len(root.associated_cves)}`.",
+                f"- Recommended: {escape_markdown(root.recommended_change)}",
+                f"- Why selected: {escape_markdown(root.risk_reason)}",
+                f"- Risk tier: `{escape_markdown(root.risk_tier)}`.",
+                f"- Policy status: `{escape_markdown(snapshot.policy_and_compliance.policy_status)}`.",
+                "",
+            ]
+        )
+    lines.extend(["## What changed", ""])
+    changed = [
+        change for root in snapshot.root_causes for change in root.modified_files
+    ]
+    if changed:
+        for change in changed:
+            lines.append(
+                f"- `{escape_markdown(change.path)}` — `{change.state.value}`; "
+                f"+{_count(change.lines_added)} / -{_count(change.lines_removed)} lines."
+            )
+    else:
+        lines.append("- No repository file change has verified execution evidence.")
+    lines.extend(["", "## Verification state", ""])
+    evidence = snapshot.execution_evidence
+    lines.extend(
+        [
+            f"- Patch: `{evidence.patch.value}`",
+            f"- Tests: `{evidence.tests.value}`",
+            f"- Pull request: `{evidence.pull_request.value}`",
+            f"- Post-fix rescan: `{evidence.rescan.value}`",
+            "",
+            "## Risks",
+            "",
+        ]
+    )
+    risks = (
+        list(snapshot.residual_risk.unresolved_vulnerabilities)
+        + list(snapshot.residual_risk.blocked_remediation)
+        + list(snapshot.residual_risk.unverified_remediation)
+        + list(snapshot.residual_risk.exposure_uncertainty)
+    )
+    lines.extend(f"- {escape_markdown(item)}" for item in risks[:20])
+    if not risks:
+        lines.append(
+            "- No residual risk was recorded; consult validation notes for evidence limitations."
+        )
+    lines.extend(["", "## Developer next steps", ""])
+    next_steps = [
+        item
+        for root in snapshot.root_causes
+        for item in root.remaining_developer_actions
+    ]
+    lines.extend(f"- {escape_markdown(item)}" for item in dict.fromkeys(next_steps))
+    if not next_steps:
+        lines.append("- Review the full evidence report before merging.")
+    lines.extend(
+        [
+            "",
+            f"Full report: [{escape_markdown(html_name)}]({escape_markdown(html_name)})",
+            "",
+        ]
+    )
+    rendered = "\n".join(lines)
+    if len(rendered) > 8_000:
+        rendered = rendered[:7_700].rstrip() + (
+            "\n\nReport truncated for review safety. See "
+            f"[{escape_markdown(html_name)}]({escape_markdown(html_name)}) for complete evidence.\n"
+        )
+    return rendered[:60_000]
 
 
-def write_markdown_report(state: VulnFlowState, output_path: Union[str, Path]) -> Path:
-    """Render and persist Markdown report to disk."""
+def write_markdown_report(
+    report: RunReport | VulnFlowState, output_path: str | Path
+) -> Path:
+    """Atomically persist the canonical Markdown report."""
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    content = generate_markdown_report(state)
-    with open(out, "w", encoding="utf-8") as f:
-        f.write(content)
+    payload = generate_markdown_report(report) + "\n"
+    descriptor, temp_name = tempfile.mkstemp(
+        prefix=f".{out.name}.", dir=out.parent, text=True
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as target:
+            target.write(payload)
+            target.flush()
+            os.fsync(target.fileno())
+        os.replace(temp_name, out)
+    except BaseException:
+        try:
+            os.unlink(temp_name)
+        except FileNotFoundError:
+            pass
+        raise
     return out

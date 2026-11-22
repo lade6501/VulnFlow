@@ -312,7 +312,8 @@ vulnflow/
 
 ## 6. Data Contracts
 
-Communication between layers is governed by four versioned Pydantic schema contracts defined in `contracts/`.
+Communication between layers is governed by versioned contracts defined in `contracts/`, including
+the canonical Pydantic `RunReport` added by F43.
 
 ### 6.1 `Finding` Contract
 ```python
@@ -432,7 +433,7 @@ docker run --rm \
 
 ---
 
-## 10. Complete Feature Inventory (42 Features)
+## 10. Complete Feature Inventory (43 Features)
 
 The VulnFlow implementation encompasses 42 sequential features across eight functional groups:
 
@@ -485,6 +486,7 @@ The VulnFlow implementation encompasses 42 sequential features across eight func
 - **F34**: Prompt-injection defenses (P4 — `agents/prompts/`, `tests/security/`, depends on F07)
 - **F35**: Evaluation harness (P5 — `evals/`, depends on F22)
 - **F42**: **LLM provider abstraction** (P1 — `src/vulnflow/llm/`, depends on **F04, F31**)
+- **F43**: **Enterprise run reporting & AI remediation intelligence** (P4 — `contracts/report.py`, `reporting/`, `cli.py`, `store/run_store.py`, depends on F05, F07, F09, F22, F31, F32, F42)
 
 ### 3.8 User Interface
 - **F36**: Runs dashboard (P2 — `ui/src/pages/Runs.tsx`, `api/routes/runs.py`, depends on F27)
@@ -507,3 +509,31 @@ The delivery roadmap spans six phases:
 - **Phase 5: Evaluation and demo (Week 3 Days 4–5)**: RAGAS / DeepEval suites, metrics reporting, recorded LLM demo replay, runbook completion. *Gate: One-command demo environment; automated metrics report.*
 
 For detailed phase breakdowns, roadmap diagrams, and harness engineering specifications, see [docs/design-and-delivery.md](file:///Users/vishal/Documents/VulnFlow/vulnflow/docs/design-and-delivery.md).
+
+---
+
+## 12. Enterprise run reporting (F43)
+
+After workflow completion, the CLI persists the run evidence and asks the reporting builder for one
+immutable `RunReport` snapshot. The builder is read-only: it consumes normalized findings,
+root-cause groups, remediation plans, tool results and audit events; it never calls an LLM, executes
+a tool, rescans or opens a PR. Deterministic advisory validation separates expected CVEs from CVEs
+verified by an executed post-fix rescan.
+
+```text
+Persisted run evidence + audit completion events
+                    |
+                    v
+      deterministic report builder
+       | validation | redaction |
+                    v
+         immutable RunReport v1
+          /          |          \
+       JSON         HTML       Markdown
+```
+
+The HTML renderer uses a packaged trusted template, standard-library escaping, inline CSS and a
+restrictive CSP; it has no JavaScript or external assets. Markdown neutralizes mentions and syntax.
+JSON is schema-validated and deterministically ordered. All renderers write atomically and a failure
+does not change the VulnFlow workflow exit code. See [reporting.md](reporting.md) and
+[ADR 0001](adr/0001-canonical-run-report.md).

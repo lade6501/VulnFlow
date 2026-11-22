@@ -11,6 +11,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from vulnflow.config import settings
 from vulnflow.contracts.finding import Finding
 from vulnflow.contracts.policy import PolicyStatus
 from vulnflow.contracts.remediation_plan import (
@@ -51,7 +52,13 @@ class PlannerAgent:
     and organizational policies into a verified RemediationPlan.
     """
 
-    def __init__(self, client: Optional[LLMClient] = None, enable_llm: Optional[bool] = None) -> None:
+    def __init__(
+        self,
+        client: Optional[LLMClient] = None,
+        enable_llm: Optional[bool] = None,
+        enrichment_mode: Optional[str] = None,
+        max_llm_calls_per_run: Optional[int] = None,
+    ) -> None:
         if enable_llm is None:
             if os.getenv("VULNFLOW_ENABLE_LLM", "").lower() in ("0", "false", "no"):
                 enable_llm = False
@@ -62,11 +69,85 @@ class PlannerAgent:
 
         self.enable_llm = bool(enable_llm)
         self.client = client if client is not None else (create_llm_client(role="planner") if self.enable_llm else None)
-        self._circuit_broken = False
+        configured_mode = enrichment_mode or settings.llm.planner_enrichment_mode
+        self.enrichment_mode = (
+            configured_mode if configured_mode in {"off", "selective", "all"} else "selective"
+        )
+        configured_budget = (
+            settings.llm.planner_max_calls_per_run
+            if max_llm_calls_per_run is None
+            else max_llm_calls_per_run
+        )
+        self.max_llm_calls_per_run = max(0, configured_budget)
+        self.reset_circuit_breaker()
 
     def reset_circuit_breaker(self) -> None:
-        """Reset the circuit breaker for a new run."""
+        """Reset provider failure and enrichment accounting for a new run."""
         self._circuit_broken = False
+        self._llm_calls_this_run = 0
+        self._enrichment_stats: Dict[str, Any] = {
+            "dependency_groups": 0,
+            "eligible_groups": 0,
+            "model_calls": 0,
+            "enriched_plans": 0,
+            "failed_calls": 0,
+            "skip_reasons": {},
+        }
+        self._last_enrichment: Dict[str, Any] = {
+            "state": "not_run",
+            "reason": "not_evaluated",
+        }
+
+    @property
+    def last_enrichment(self) -> Dict[str, Any]:
+        """Return safe audit metadata for the most recently formulated plan."""
+        return dict(self._last_enrichment)
+
+    def enrichment_stats(self) -> Dict[str, Any]:
+        """Return run-scoped planner model-call accounting."""
+        stats = dict(self._enrichment_stats)
+        stats["skip_reasons"] = dict(self._enrichment_stats["skip_reasons"])
+        stats["budget"] = self.max_llm_calls_per_run
+        stats["mode"] = self.enrichment_mode
+        return stats
+
+    def _record_skip(self, reason: str) -> None:
+        self._last_enrichment = {"state": "not_run", "reason": reason}
+        skip_reasons = self._enrichment_stats["skip_reasons"]
+        skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+
+    def _enrichment_reasons(
+        self,
+        *,
+        current_version: str,
+        target_version: str,
+        available_versions: List[str],
+        is_transitive: bool,
+    ) -> List[str]:
+        reasons: List[str] = []
+        if parse_version_tuple(target_version)[0] > parse_version_tuple(current_version)[0]:
+            reasons.append("major_version_upgrade")
+        if len(available_versions) > 1:
+            reasons.append("multiple_viable_versions")
+        if is_transitive:
+            reasons.append("transitive_dependency")
+        return reasons
+
+    def _should_enrich(self, reasons: List[str], citations: List[str]) -> tuple[bool, str]:
+        if not self.enable_llm or not self.client:
+            return False, "llm_disabled"
+        if self.enrichment_mode == "off":
+            return False, "enrichment_disabled"
+        if not citations:
+            return False, "missing_source_evidence"
+        if self.enrichment_mode == "selective" and not reasons:
+            return False, "deterministic_plan_sufficient"
+        self._enrichment_stats["eligible_groups"] += 1
+        if self._circuit_broken:
+            return False, "provider_circuit_open"
+        if self._llm_calls_this_run >= self.max_llm_calls_per_run:
+            return False, "run_budget_exhausted"
+        return True, ",".join(reasons) if reasons else "all_mode"
 
     def plan_remediation(
         self,
@@ -74,10 +155,13 @@ class PlannerAgent:
         findings: List[Finding],
         advisories: Optional[List[Dict[str, Any]]] = None,
         ecosystem: str = "npm",
+        is_transitive: bool = False,
     ) -> RemediationPlan:
         """
         Formulate a policy-compliant RemediationPlan for a cluster of related findings.
         """
+        self._enrichment_stats["dependency_groups"] += 1
+        self._last_enrichment = {"state": "not_run", "reason": "deterministic_planning"}
         clean_package = root_cause_id.replace("PKG-", "").replace(f"{ecosystem}:", "")
         full_package = f"{ecosystem}:{clean_package}" if ":" not in clean_package else clean_package
 
@@ -110,6 +194,7 @@ class PlannerAgent:
             PolicyStatus.DEPRECATED.value,
             PolicyStatus.BANNED.value,
         ):
+            self._record_skip("deterministic_policy_replacement")
             return RemediationPlan(
                 id=_make_plan_id(root_cause_id, pol_result.replacement, "latest", RemediationAction.REPLACE.value),
                 finding_ids=finding_ids,
@@ -126,6 +211,7 @@ class PlannerAgent:
 
         # Case A: Package is banned or denied by license without replacement
         if pol_result.status in (PolicyStatus.BANNED.value, PolicyStatus.LICENSE_DENIED.value):
+            self._record_skip("deterministic_policy_block")
             return RemediationPlan(
                 id=_make_plan_id(root_cause_id, full_package, "none", RemediationAction.EXCEPTION.value),
                 finding_ids=finding_ids,
@@ -155,6 +241,7 @@ class PlannerAgent:
             requires_approval = True
         else:
             # Case C: No upstream fix version exists anywhere
+            self._record_skip("no_upstream_fix")
             return RemediationPlan(
                 id=_make_plan_id(root_cause_id, full_package, "none", RemediationAction.EXCEPTION.value),
                 finding_ids=finding_ids,
@@ -281,8 +368,20 @@ class PlannerAgent:
             code_tier = RiskTier.REVIEW
         risk_tier = code_tier
 
-        # Only invoke LLM if enabled, client exists, and circuit breaker is unbroken
-        if self.enable_llm and self.client and not self._circuit_broken:
+        enrichment_reasons = self._enrichment_reasons(
+            current_version=cur_version,
+            target_version=target_version,
+            available_versions=available_all,
+            is_transitive=is_transitive,
+        )
+        should_enrich, enrichment_reason = self._should_enrich(
+            enrichment_reasons, chunk_citations
+        )
+
+        # Invoke the model only for evidenced complex cases within the per-run budget.
+        if should_enrich and self.client:
+            self._llm_calls_this_run += 1
+            self._enrichment_stats["model_calls"] += 1
             try:
                 provider_name = self.client.get_provider_name() if hasattr(self.client, "get_provider_name") else "llm"
                 model_name = getattr(self.client, "default_model", "default")
@@ -307,7 +406,33 @@ class PlannerAgent:
                         risk_tier.value,
                         rationale[:80],
                     )
+                    usage = getattr(resp, "usage", None)
+                    self._last_enrichment = {
+                        "state": "executed",
+                        "reason": enrichment_reason,
+                        "provider": getattr(resp, "provider", None) or provider_name,
+                        "model": getattr(resp, "model", None) or model_name,
+                        "cached": bool(getattr(resp, "cached", False)),
+                        "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                        "completion_tokens": getattr(usage, "completion_tokens", None),
+                        "total_tokens": getattr(usage, "total_tokens", None),
+                        "estimated_cost_usd": getattr(usage, "cost_estimate_usd", None),
+                    }
+                    self._enrichment_stats["enriched_plans"] += 1
+                else:
+                    self._last_enrichment = {
+                        "state": "failed",
+                        "reason": "empty_structured_output",
+                        "provider": provider_name,
+                        "model": model_name,
+                    }
+                    self._enrichment_stats["failed_calls"] += 1
             except Exception as exc:
+                self._last_enrichment = {
+                    "state": "failed",
+                    "reason": "provider_error",
+                }
+                self._enrichment_stats["failed_calls"] += 1
                 err_str = str(exc)
                 if any(k in err_str.lower() for k in ("timed out", "timeout", "unreachable", "errno 8", "nodename", "503", "safety", "screening", "server error")):
                     self._circuit_broken = True
@@ -317,6 +442,8 @@ class PlannerAgent:
                     )
                 else:
                     logger.info("Using deterministic planner fallback (%s)", exc)
+        else:
+            self._record_skip(enrichment_reason)
 
         return RemediationPlan(
             id=_make_plan_id(root_cause_id, full_package, target_version, RemediationAction.BUMP.value),

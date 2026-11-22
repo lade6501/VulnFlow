@@ -25,6 +25,7 @@ from vulnflow.contracts.remediation_plan import (
     VerificationResult,
 )
 from vulnflow.contracts.state import VulnFlowState
+from vulnflow.contracts.report import RunReport
 
 __all__ = [
     "ApprovedPackagesPolicy",
@@ -39,6 +40,7 @@ __all__ = [
     "RemediationPlan",
     "RiskTier",
     "RiskTierThresholds",
+    "RunReport",
     "SeverityLevel",
     "VerificationResult",
     "VulnFlowState",

@@ -230,6 +230,7 @@ def plan_node(state: VulnFlowState) -> VulnFlowState:
                 findings=findings_objs,
                 advisories=advisories,
                 ecosystem=pkg_eco,
+                is_transitive=not bool(group.get("is_direct", True)),
             )
             plans.append(plan)
 
@@ -247,10 +248,16 @@ def plan_node(state: VulnFlowState) -> VulnFlowState:
                     "requires_approval": plan.requires_approval,
                     "policy_status": plan.policy_result.status if plan.policy_result else "APPROVED",
                     "ai_rationale": plan.rationale,
+                    "llm_enrichment": default_planner_agent.last_enrichment,
                 },
             )
 
         state.plans = plans
+        state.append_audit(
+            "PLANNER_LLM_ENRICHMENT_SUMMARY",
+            "planner_agent",
+            default_planner_agent.enrichment_stats(),
+        )
         state.append_audit("PLANS_GENERATED", "orchestrator", {"plans_count": len(plans)})
         return state
 

@@ -1,0 +1,14 @@
+<!--
+src/vulnflow/reporting/templates/report.html
+Provides the trusted self-contained shell for enterprise run reports.
+-->
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+<title>VulnFlow Enterprise Run Report</title><style>
+:root{color-scheme:light;--ink:#17212b;--muted:#5d6a76;--line:#d7dde3;--paper:#fff;--wash:#f3f6f8;--brand:#174f70}*{box-sizing:border-box}
+body{margin:0;background:var(--wash);color:var(--ink);font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}main{width:min(1120px,calc(100% - 32px));margin:28px auto;background:var(--paper);border:1px solid var(--line);box-shadow:0 8px 30px #17212b14}
+section,.report-header{padding:24px 32px;border-bottom:1px solid var(--line)}.report-header{display:flex;justify-content:space-between;gap:24px;background:#153a50;color:#fff}h1,h2,h3,h4{line-height:1.2;margin-top:0}h2{color:var(--brand);font-size:1.35rem}.eyebrow,.meta,.muted,figcaption{color:var(--muted)}.report-header .eyebrow{color:#c9dce6;margin:0}.outcome{min-width:180px;text-align:right}.outcome span,.outcome strong{display:block}.outcome strong{font-size:1.25rem}.lead{font-size:1.08rem}.metrics{display:grid;grid-template-columns:repeat(6,minmax(100px,1fr));gap:10px}.metrics div{border:1px solid var(--line);padding:14px;background:var(--wash)}.metrics strong,.metrics span{display:block}.metrics strong{font-size:1.45rem}dl{display:grid;grid-template-columns:minmax(150px,240px) 1fr;gap:8px 18px}dt{font-weight:650}dd{margin:0;overflow-wrap:anywhere}.meta-grid{grid-template-columns:150px 1fr 150px 1fr}.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse}th,td{padding:10px;border:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--wash)}details{border:1px solid var(--line);margin:14px 0}summary{cursor:pointer;padding:14px;font-weight:700;background:var(--wash)}.details-body{padding:20px}.insight{border-left:4px solid var(--brand);padding:10px 14px;margin:12px 0;background:var(--wash)}.insight h4{margin-bottom:6px}.insight p{margin:5px 0}figure{margin:0;max-width:520px}svg{width:100%;height:auto}.chart-label,.chart-value{font:12px system-ui,sans-serif;fill:#17212b}a{color:#075985;overflow-wrap:anywhere}
+@media(max-width:760px){main{width:100%;margin:0;border:0}section,.report-header{padding:20px}.metrics{grid-template-columns:repeat(2,1fr)}.meta-grid,dl{grid-template-columns:1fr}.report-header{display:block}.outcome{text-align:left}}
+@media print{body{background:#fff;font-size:10pt}main{width:100%;margin:0;border:0;box-shadow:none}details{break-inside:avoid}details>*{display:block}a{color:#000;text-decoration:none}section{break-inside:avoid}}
+</style></head><body><main>{{REPORT_CONTENT}}</main></body></html>
