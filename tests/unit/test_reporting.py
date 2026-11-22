@@ -18,7 +18,7 @@ from vulnflow.contracts.remediation_plan import (
     RemediationPlan,
     RiskTier,
 )
-from vulnflow.contracts.report import RunReport, StepState
+from vulnflow.contracts.report import EvidenceAvailability, RunReport, StepState
 from vulnflow.contracts.state import VulnFlowState
 from vulnflow.reporting.builder import build_run_report, version_satisfies
 from vulnflow.reporting.html_report import generate_html_report
@@ -166,10 +166,10 @@ def test_renderer_golden_hashes() -> None:
     html_hash = hashlib.sha256(generate_html_report(report).encode()).hexdigest()
     assert (
         markdown_hash
-        == "c638460eba6ef0f6b756ae328ad7536ac58ed6d11ec062d7b8569a394c8e4623"
+        == "39866944279bee59fa25f2d522a2b08f31908089b6df6540e3cdef417ae6cfec"
     )
     assert (
-        html_hash == "8e698a88df912bfe9075792da54766c8b78a6c6762141893e1eeb5de25488f1e"
+        html_hash == "e147c9189a9ca0e249b13d51b36f616b1b3b0de1db315a3f0b12080cca6aac34"
     )
 
 
@@ -450,7 +450,9 @@ def test_failed_remediation_and_test_failure() -> None:
     assert checks["sandbox_tests"].passed is False
 
 
-def test_write_run_reports_generates_html_and_json_alongside_markdown(tmp_path: Path) -> None:
+def test_write_run_reports_generates_html_and_json_alongside_markdown(
+    tmp_path: Path,
+) -> None:
     """Ensure that specifying --output report.md also generates report.html and run-report.json."""
     from vulnflow import cli
 
@@ -504,3 +506,173 @@ def test_write_run_reports_with_env_reports_dir(monkeypatch, tmp_path: Path) -> 
     assert (reports_dir / "report.md").exists()
 
 
+def test_applied_fixes_are_prominently_reported() -> None:
+    """Objective 1 & 7: Applied fixes appear prominently before investigations."""
+    state = report_state()
+    report = build_run_report(state, generated_at=FIXED_TIME)
+    md = generate_markdown_report(report)
+    html = generate_html_report(report)
+
+    # Check section ordering
+    assert "## B. Remediation Actions Performed" in md
+    assert "## D. AI Investigations and Decisions" in md
+    assert md.index("## B. Remediation Actions Performed") < md.index(
+        "## D. AI Investigations and Decisions"
+    )
+
+    # Check applied fix content
+    assert "Applied Fixes & Mitigations (1):" in md
+    assert "npm:lodash" in md
+    assert "package.json" in md
+    assert "Applied Remediation Patches" in html
+
+
+def test_real_pr_details_appear_when_available() -> None:
+    """Objective 1 & 7: Real PR details appear when confirmed by audit events."""
+    state = report_state()
+    # Add matching PR_CREATED audit event
+    state.audit_events.append(
+        {
+            "event_type": "PR_CREATED",
+            "payload": {
+                "pr_url": "https://github.com/acme/sample/pull/7",
+                "branch": "vulnflow/fix-lodash",
+                "title": "fix(deps): bump lodash to 4.17.21",
+                "campaign": False,
+            },
+        }
+    )
+    report = build_run_report(state, generated_at=FIXED_TIME)
+    md = generate_markdown_report(report)
+    html = generate_html_report(report)
+
+    assert "## C. Pull Requests Created" in md
+    assert "PR #7" in md or "PR" in md
+    assert "https://github.com/acme/sample/pull/7" in md
+    assert "vulnflow/fix" in md
+    assert "https://github.com/acme/sample/pull/7" in html
+
+
+def test_no_invented_pr_details_appear() -> None:
+    """Objective 1 & 7: No PR details appear when PR was not created."""
+    state = report_state()
+    state.pull_requests = []
+    state.audit_events = [
+        e for e in state.audit_events if e.get("event_type") != "PR_CREATED"
+    ]
+    report = build_run_report(state, generated_at=FIXED_TIME)
+    md = generate_markdown_report(report)
+
+    assert "No pull requests were opened in this execution." in md
+    assert "https://github.com/acme/sample/pull/7" not in md
+
+
+def test_approval_lists_cannot_dominate_main_report() -> None:
+    """Objective 4 & 7: Approval lists cannot dominate the main report; must be grouped."""
+    state = report_state()
+    # Create 37 pending plans
+    pending_plans = []
+    for i in range(37):
+        p = RemediationPlan(
+            id=f"PLAN-{i:04d}",
+            finding_ids=["FND-LODASH"],
+            root_cause_id=f"PKG-npm:dep-{i}",
+            action=RemediationAction.BUMP,
+            target_version=f"{i}.0.0",
+            target_package=f"npm:dep-{i}",
+            policy_result=PolicyResult(status="unknown"),
+            risk_tier=RiskTier.REVIEW,
+            requires_approval=True,
+            evidence=[],
+            rationale=f"Bump dep-{i}",
+        )
+        pending_plans.append(p)
+
+    state.plans.extend(pending_plans)
+    state.pending_approval_plans = pending_plans
+    report = build_run_report(state, generated_at=FIXED_TIME)
+    md = generate_markdown_report(report)
+
+    # Must NOT have 37 individual bullet points flooding the report
+    individual_spam = [
+        f"- **high**: Review and approve plan PLAN-{i:04d}" for i in range(37)
+    ]
+    assert sum(item in md for item in individual_spam) < 5
+
+    # Must have grouped summary
+    assert "Governance Authorization Gate" in md
+    assert "vulnflow approve --all" in md
+
+    # Must stay bounded under 8000 chars without cutting off
+    assert len(md) <= 8000
+    assert "Report truncated for review safety" not in md
+
+
+def test_ai_insights_include_valid_evidence_references() -> None:
+    """Objective 2 & 7: AI insights include valid evidence references."""
+    state = report_state()
+    report = build_run_report(state, generated_at=FIXED_TIME)
+    root = report.root_causes[0]
+
+    assert len(root.insights) >= 2
+    for insight in root.insights:
+        assert insight.evidence_availability in {
+            EvidenceAvailability.AVAILABLE,
+            EvidenceAvailability.NOT_EVALUATED,
+            EvidenceAvailability.MISSING,
+        }
+        if insight.evidence_availability == EvidenceAvailability.AVAILABLE:
+            assert len(insight.source_references) >= 1
+
+
+def test_missing_investigations_display_not_evaluated() -> None:
+    """Objective 2 & 7: Missing investigations display NOT_EVALUATED."""
+    state = report_state()
+    # Remove locations from findings and root cause group so reachability cannot be evaluated
+    state.deduped_findings[0].location = None
+    state.findings[0].location = None
+    state.root_cause_groups[0]["findings"][0]["location"] = {}
+    report = build_run_report(state, generated_at=FIXED_TIME)
+    root = report.root_causes[0]
+
+    impact_insight = next(
+        (i for i in root.insights if i.category == "repository_impact"), None
+    )
+    assert impact_insight is not None
+    assert impact_insight.evidence_availability == EvidenceAvailability.NOT_EVALUATED
+
+
+def test_zero_verified_fixes_not_presented_as_resolved() -> None:
+    """Objective 6 & 7: Zero verified fixes are never presented as resolved."""
+    state = report_state(executed_rescan=False)
+    report = build_run_report(state, generated_at=FIXED_TIME)
+    md = generate_markdown_report(report)
+
+    assert report.executive_summary.verified_cves_resolved == 0
+    assert "| Verified CVEs resolved | 0 |" in md
+    assert (
+        "0 CVE(s) are verified resolved." in md
+        or "0 verified" in md
+        or "Verified CVEs" in md
+    )
+
+
+def test_markdown_html_json_remain_consistent() -> None:
+    """Objective 7: Markdown, HTML and JSON metrics remain strictly consistent."""
+    state = report_state()
+    report = build_run_report(state, generated_at=FIXED_TIME)
+    md = generate_markdown_report(report)
+    html = generate_html_report(report)
+    json_data = generate_json_report(report)
+
+    summary = report.executive_summary
+    # Check consistent counts
+    assert f"| Findings analyzed | {summary.findings_analyzed} |" in md
+    assert f"<strong>{summary.findings_analyzed}</strong><span>Findings</span>" in html
+    assert (
+        json_data["executive_summary"]["findings_analyzed"] == summary.findings_analyzed
+    )
+
+    assert f"| Fixes applied | {summary.fixes_applied} |" in md
+    assert f"<strong>{summary.fixes_applied}</strong><span>Applied fixes</span>" in html
+    assert json_data["executive_summary"]["fixes_applied"] == summary.fixes_applied

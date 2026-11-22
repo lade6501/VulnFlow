@@ -13,10 +13,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from vulnflow.contracts.remediation_plan import RemediationAction
 from vulnflow.contracts.report import (
     ActionRequired,
     AdvisoryEvidence,
+    AppliedPatchSummary,
     ApprovalDecision,
+    ApprovalGroup,
+    CampaignSummary,
     CompletionStatus,
     DependencyOrigin,
     EvaluatedRule,
@@ -28,6 +32,7 @@ from vulnflow.contracts.report import (
     GeneratedBy,
     PolicyCompliance,
     Provenance,
+    PullRequestSummary,
     RemediationOption,
     RepoChanges,
     ReportHeader,
@@ -188,7 +193,8 @@ def _planner_llm_provenance(
         values = [
             item[field]
             for item in enrichments
-            if isinstance(item.get(field), int) and not isinstance(item.get(field), bool)
+            if isinstance(item.get(field), int)
+            and not isinstance(item.get(field), bool)
         ]
         return sum(values) if values else None
 
@@ -597,6 +603,75 @@ def _root_causes(
                     evidence_availability=EvidenceAvailability.AVAILABLE,
                 )
             )
+        if plan and plan.rationale:
+            clean_rat = redact_report_text(plan.rationale)
+            insights.append(
+                SecurityInsight(
+                    category="remediation_strategy",
+                    text=clean_rat,
+                    generated_by=GeneratedBy.LLM
+                    if ("•" in clean_rat or "Developer Migration" in clean_rat)
+                    else GeneratedBy.RULES,
+                    source_references=source_ids or finding_ids,
+                    evidence_availability=EvidenceAvailability.AVAILABLE,
+                )
+            )
+
+        if (
+            installed
+            and target
+            and installed not in ("UNKNOWN", "none")
+            and target not in ("UNKNOWN", "none", "latest", "env-var")
+        ):
+            cur_parts = _version_parts(installed, ecosystem)[0]
+            tgt_parts = _version_parts(target, ecosystem)[0]
+            if cur_parts and tgt_parts:
+                cur_num = cur_parts + (0, 0, 0)
+                tgt_num = tgt_parts + (0, 0, 0)
+                if tgt_num[0] > cur_num[0]:
+                    insights.append(
+                        SecurityInsight(
+                            category="compatibility_concern",
+                            text=(
+                                f"Major SemVer leap from {installed} to {target} (v{cur_num[0]} to v{tgt_num[0]}). "
+                                "Breaking API changes and deprecations may affect existing callsites."
+                            ),
+                            generated_by=GeneratedBy.RULES,
+                            source_references=finding_ids,
+                            evidence_availability=EvidenceAvailability.AVAILABLE,
+                            uncertainty="Static SemVer comparison does not prove runtime breakage without integration testing.",
+                        )
+                    )
+                elif tgt_num[1] > cur_num[1]:
+                    insights.append(
+                        SecurityInsight(
+                            category="compatibility_concern",
+                            text=f"Minor SemVer update from {installed} to {target}. Backwards compatibility is expected under SemVer.",
+                            generated_by=GeneratedBy.RULES,
+                            source_references=finding_ids,
+                            evidence_availability=EvidenceAvailability.AVAILABLE,
+                        )
+                    )
+                else:
+                    insights.append(
+                        SecurityInsight(
+                            category="compatibility_concern",
+                            text=f"Patch version bump from {installed} to {target}. Backward compatible security fix with low risk of regressions.",
+                            generated_by=GeneratedBy.RULES,
+                            source_references=finding_ids,
+                            evidence_availability=EvidenceAvailability.AVAILABLE,
+                        )
+                    )
+
+        insights.append(
+            SecurityInsight(
+                category="verification_guidance",
+                text=f"Run automated test suite and execute a post-fix security rescan to confirm {len(cves)} CVE(s) in {package} are resolved.",
+                generated_by=GeneratedBy.RULES,
+                source_references=finding_ids,
+                evidence_availability=EvidenceAvailability.AVAILABLE,
+            )
+        )
         options: tuple[RemediationOption, ...] = ()
         if plan:
             options = (
@@ -789,6 +864,306 @@ def _policy(state: VulnFlowState) -> PolicyCompliance:
         exceptions=exceptions,
         unresolved_policy_issues=tuple(issues),
     )
+
+
+def _build_pull_requests(
+    state: VulnFlowState, execution: ExecutionEvidence
+) -> tuple[PullRequestSummary, ...]:
+    """Extract real verified PR records confirmed by stored PR_CREATED audit evidence."""
+    if state.mode in {"report", "dry-run"}:
+        return ()
+
+    pr_summaries: list[PullRequestSummary] = []
+    pr_events = _event_payloads(state, "PR_CREATED")
+    commit_sha = next(
+        (
+            payload.get("commit_sha")
+            for payload in reversed(_event_payloads(state, "COMMIT_CREATED"))
+            if payload.get("commit_sha")
+        ),
+        None,
+    )
+
+    for pr in state.pull_requests:
+        if not isinstance(pr, dict):
+            continue
+        raw_url = pr.get("pr_url")
+        url = _safe_external_url(raw_url)
+        # Verify matching PR_CREATED audit evidence
+        ev_match = next(
+            (
+                ev
+                for ev in pr_events
+                if ev.get("pr_url") == raw_url or ev.get("branch") == pr.get("branch")
+            ),
+            None,
+        )
+        if url and ev_match:
+            branch = str(pr.get("branch") or ev_match.get("branch") or "")
+            is_campaign = bool(pr.get("campaign") or ev_match.get("campaign"))
+            if is_campaign:
+                pkgs = tuple(
+                    sorted(
+                        dict.fromkeys(
+                            p.target_package or p.root_cause_id
+                            for p in state.approved_plans
+                            if getattr(p, "action", None) == RemediationAction.BUMP
+                            and "secret:" not in str(p.root_cause_id)
+                        )
+                    )
+                )
+            else:
+                matching = [
+                    p.target_package or p.root_cause_id
+                    for p in state.approved_plans
+                    if (p.target_package and p.target_package in branch)
+                    or (p.id in branch)
+                ]
+                pkgs = tuple(sorted(dict.fromkeys(matching)))
+
+            pr_summaries.append(
+                PullRequestSummary(
+                    pr_number=pr.get("pr_number") or ev_match.get("pr_number"),
+                    pr_url=url,
+                    branch=redact_report_text(branch),
+                    title=redact_report_text(pr.get("title") or ev_match.get("title")),
+                    commit_sha=redact_report_text(commit_sha),
+                    affected_packages=pkgs or tuple(pr.get("packages", ())),
+                    plans_count=len(pkgs) or int(pr.get("plans_count", 1)),
+                    campaign=is_campaign,
+                    status=str(pr.get("status", "opened")),
+                    verified=(execution.rescan == StepState.EXECUTED),
+                )
+            )
+    return tuple(pr_summaries)
+
+
+def _build_applied_patches(
+    state: VulnFlowState, execution: ExecutionEvidence
+) -> tuple[AppliedPatchSummary, ...]:
+    """Collect applied file changes and diff snippets verified by audit evidence."""
+    if execution.patch != StepState.EXECUTED:
+        return ()
+
+    patch_summaries: list[AppliedPatchSummary] = []
+    for patch in state.patches:
+        if not isinstance(patch, dict):
+            continue
+        res = patch.get("result", {})
+        if res.get("status") == "applied" or patch.get("diff"):
+            plan_match = next(
+                (p for p in state.plans if p.id == patch.get("plan_id")), None
+            )
+            target_pkg = (
+                plan_match.target_package
+                if plan_match and plan_match.target_package
+                else (patch.get("file") or "manifest")
+            )
+            diff_text = str(patch.get("diff") or "")
+            snippet_lines = [line for line in diff_text.strip().splitlines() if line]
+            snippet = "\n".join(snippet_lines[:10]) if snippet_lines else None
+            patch_summaries.append(
+                AppliedPatchSummary(
+                    plan_id=str(patch.get("plan_id", "PLAN-APPLIED")),
+                    target_package=redact_report_text(target_pkg),
+                    file_path=redact_report_text(patch.get("file", "")),
+                    status="applied",
+                    lines_added=res.get("lines_added"),
+                    lines_removed=res.get("lines_removed"),
+                    diff_snippet=redact_report_text(snippet) if snippet else None,
+                )
+            )
+    return tuple(patch_summaries)
+
+
+def _build_campaigns(
+    state: VulnFlowState,
+    pr_summaries: tuple[PullRequestSummary, ...],
+    execution: ExecutionEvidence,
+    fixes: int,
+) -> tuple[CampaignSummary, ...]:
+    """Synthesize multi-package coordinated campaigns for high-level governance."""
+    campaigns: list[CampaignSummary] = []
+    dep_plans = [p for p in state.plans if "secret:" not in str(p.root_cause_id)]
+    if dep_plans:
+        camp_branch = next(
+            (b for b in state.created_branches if "campaign" in b),
+            f"vulnflow/campaign-{state.run_id[:8]}",
+        )
+        pr_match = next((pr for pr in pr_summaries if pr.campaign), None)
+        dep_pkgs = tuple(
+            sorted(
+                dict.fromkeys(
+                    p.target_package or p.root_cause_id
+                    for p in dep_plans
+                    if p.target_package or p.root_cause_id
+                )
+            )
+        )
+        all_f = state.deduped_findings or state.findings
+        dep_cves = tuple(
+            sorted(
+                dict.fromkeys(
+                    c
+                    for p in dep_plans
+                    for f in all_f
+                    if f.id in p.finding_ids
+                    for c in f.cve
+                )
+            )
+        )
+        camp_status = "opened" if pr_match else ("applied" if fixes > 0 else "prepared")
+        campaigns.append(
+            CampaignSummary(
+                campaign_id="CAMP-DEPS-01",
+                title="Coordinated Dependency Modernization Campaign",
+                branch=camp_branch,
+                pr_url=pr_match.pr_url if pr_match else None,
+                packages=dep_pkgs,
+                plans_count=len(dep_plans),
+                cves_addressed=dep_cves,
+                status=camp_status,
+            )
+        )
+
+    sec_plans = [p for p in state.plans if "secret:" in str(p.root_cause_id)]
+    if sec_plans:
+        sec_applied = any(
+            p.id
+            in [
+                patch.get("plan_id")
+                for patch in state.patches
+                if isinstance(patch, dict)
+            ]
+            for p in sec_plans
+        )
+        campaigns.append(
+            CampaignSummary(
+                campaign_id="CAMP-SECRETS-01",
+                title="Consolidated Hardcoded Secrets & Credentials Rotation",
+                branch="vulnflow/campaign-secrets",
+                pr_url=None,
+                packages=("secret:credentials",),
+                plans_count=len(sec_plans),
+                cves_addressed=(),
+                status="applied" if sec_applied else "awaiting_approval",
+            )
+        )
+    return tuple(campaigns)
+
+
+def _build_approval_groups(state: VulnFlowState) -> tuple[ApprovalGroup, ...]:
+    """Group pending approval plans into prioritized, actionable review categories."""
+    approved_ids = {plan.id for plan in state.approved_plans}
+    rejected_ids = {plan.id for plan in state.rejected_plans}
+    pending = [
+        p
+        for p in state.plans
+        if p.requires_approval and p.id not in approved_ids and p.id not in rejected_ids
+    ]
+    if not pending:
+        return ()
+
+    groups: list[ApprovalGroup] = []
+    repo = state.repo_path
+
+    # Group 1: Secrets
+    sec_plans = [p for p in pending if "secret:" in str(p.root_cause_id)]
+    if sec_plans:
+        sec_ids = tuple(p.id for p in sec_plans)
+        groups.append(
+            ApprovalGroup(
+                group_type="secrets",
+                title="Exposed Credentials & Secret Rotation",
+                description="Hardcoded passwords, API tokens, or secrets detected in source code. Proposes rotation to environment variables.",
+                plans_count=len(sec_plans),
+                plan_ids=sec_ids,
+                target_packages=("secret:credentials",),
+                cves_count=0,
+                risk_tier="review",
+                recommended_action="Review rotated environment variables and authorize branch commit.",
+                cli_command=f"vulnflow approve --plan-id {','.join(sec_ids)} --resume --repo {repo}",
+                requires_human_review=True,
+            )
+        )
+
+    # Group 2: Breaking major updates vs Group 3: Standard unapproved updates
+    breaking_plans = []
+    standard_plans = []
+    findings_by_id = {f.id: f for f in (state.deduped_findings or state.findings)}
+
+    for p in pending:
+        if "secret:" in str(p.root_cause_id):
+            continue
+        cur_v = "0.0.0"
+        for fid in p.finding_ids:
+            if fid in findings_by_id:
+                cur_v = findings_by_id[fid].version
+                break
+        cur_p = _version_parts(cur_v, state.ecosystem)[0] + (0, 0, 0)
+        tgt_p = _version_parts(p.target_version or "0.0.0", state.ecosystem)[0] + (
+            0,
+            0,
+            0,
+        )
+        if tgt_p[0] > cur_p[0]:
+            breaking_plans.append(p)
+        else:
+            standard_plans.append(p)
+
+    if breaking_plans:
+        b_ids = tuple(p.id for p in breaking_plans)
+        b_pkgs = tuple(
+            sorted(
+                dict.fromkeys(
+                    p.target_package or p.root_cause_id for p in breaking_plans
+                )
+            )
+        )
+        b_cves = sum(len(p.finding_ids) for p in breaking_plans)
+        groups.append(
+            ApprovalGroup(
+                group_type="breaking_dependency_updates",
+                title="Major Breaking Dependency Upgrades",
+                description="Upgrades crossing major SemVer version boundaries with expected API breaks or deprecations.",
+                plans_count=len(breaking_plans),
+                plan_ids=b_ids,
+                target_packages=b_pkgs,
+                cves_count=b_cves,
+                risk_tier="review",
+                recommended_action="Verify test suite compatibility and authorize major version bumps.",
+                cli_command=f"vulnflow approve --plan-id {','.join(b_ids)} --resume --repo {repo}",
+                requires_human_review=True,
+            )
+        )
+
+    if standard_plans:
+        s_ids = tuple(p.id for p in standard_plans)
+        s_pkgs = tuple(
+            sorted(
+                dict.fromkeys(
+                    p.target_package or p.root_cause_id for p in standard_plans
+                )
+            )
+        )
+        s_cves = sum(len(p.finding_ids) for p in standard_plans)
+        groups.append(
+            ApprovalGroup(
+                group_type="unapproved_dependencies",
+                title="Unvetted Library Security Updates",
+                description="Packages not pre-authorized on corporate approved lists; minor or patch version bumps.",
+                plans_count=len(standard_plans),
+                plan_ids=s_ids,
+                target_packages=s_pkgs,
+                cves_count=s_cves,
+                risk_tier="review",
+                recommended_action="Authorize automated branch remediation for safe candidate versions.",
+                cli_command=f"vulnflow approve --plan-id {','.join(s_ids)} --resume --repo {repo}",
+                requires_human_review=True,
+            )
+        )
+
+    return tuple(groups)
 
 
 def build_run_report(
@@ -1021,4 +1396,10 @@ def build_run_report(
             unsupported_claims=tuple(dict.fromkeys(unsupported)),
         ),
         execution_evidence=execution,
+        pull_requests=_build_pull_requests(state, execution),
+        applied_patches=_build_applied_patches(state, execution),
+        remediation_campaigns=_build_campaigns(
+            state, _build_pull_requests(state, execution), execution, fixes
+        ),
+        approval_groups=_build_approval_groups(state),
     )

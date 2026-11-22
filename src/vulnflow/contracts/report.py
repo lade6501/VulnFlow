@@ -268,6 +268,54 @@ class ExecutionEvidence(ReportModel):
     rescan: StepState = StepState.NOT_RUN
 
 
+class PullRequestSummary(ReportModel):
+    pr_number: int | None = None
+    pr_url: str | None = None
+    branch: str = ""
+    title: str | None = None
+    commit_sha: str | None = None
+    affected_packages: tuple[str, ...] = ()
+    plans_count: int = 0
+    campaign: bool = False
+    status: str = "opened"
+    verified: bool = False
+
+
+class AppliedPatchSummary(ReportModel):
+    plan_id: str
+    target_package: str
+    file_path: str
+    status: str = "applied"
+    lines_added: int | None = None
+    lines_removed: int | None = None
+    diff_snippet: str | None = None
+
+
+class CampaignSummary(ReportModel):
+    campaign_id: str
+    title: str
+    branch: str
+    pr_url: str | None = None
+    packages: tuple[str, ...] = ()
+    plans_count: int = 0
+    cves_addressed: tuple[str, ...] = ()
+    status: str = "prepared"
+
+
+class ApprovalGroup(ReportModel):
+    group_type: str  # "secrets", "breaking_dependency_updates", "unapproved_dependencies", "standard_bumps"
+    title: str
+    description: str
+    plans_count: int
+    plan_ids: tuple[str, ...] = ()
+    target_packages: tuple[str, ...] = ()
+    cves_count: int = 0
+    risk_tier: str = "review"
+    recommended_action: str = ""
+    cli_command: str = ""
+    requires_human_review: bool = True
+
+
 class RunReport(ReportModel):
     """Canonical report snapshot consumed unchanged by every renderer."""
 
@@ -281,3 +329,7 @@ class RunReport(ReportModel):
     provenance: Provenance
     validation_notes: ValidationNotes
     execution_evidence: ExecutionEvidence
+    pull_requests: tuple[PullRequestSummary, ...] = ()
+    applied_patches: tuple[AppliedPatchSummary, ...] = ()
+    remediation_campaigns: tuple[CampaignSummary, ...] = ()
+    approval_groups: tuple[ApprovalGroup, ...] = ()

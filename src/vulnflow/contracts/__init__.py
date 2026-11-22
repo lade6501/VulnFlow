@@ -24,11 +24,20 @@ from vulnflow.contracts.remediation_plan import (
     RiskTier,
     VerificationResult,
 )
+from vulnflow.contracts.report import (
+    AppliedPatchSummary,
+    ApprovalGroup,
+    CampaignSummary,
+    PullRequestSummary,
+    RunReport,
+)
 from vulnflow.contracts.state import VulnFlowState
-from vulnflow.contracts.report import RunReport
 
 __all__ = [
+    "AppliedPatchSummary",
+    "ApprovalGroup",
     "ApprovedPackagesPolicy",
+    "CampaignSummary",
     "Finding",
     "FindingType",
     "LocationInfo",
@@ -36,6 +45,7 @@ __all__ = [
     "PolicyResult",
     "PolicyRules",
     "PolicyStatus",
+    "PullRequestSummary",
     "RemediationAction",
     "RemediationPlan",
     "RiskTier",
