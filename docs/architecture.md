@@ -537,3 +537,19 @@ restrictive CSP; it has no JavaScript or external assets. Markdown neutralizes m
 JSON is schema-validated and deterministically ordered. All renderers write atomically and a failure
 does not change the VulnFlow workflow exit code. See [reporting.md](reporting.md) and
 [ADR 0001](adr/0001-canonical-run-report.md).
+
+---
+
+## 13. Multi-Dependency Campaigns & Autonomous Code Refactoring
+
+To maximize developer velocity and minimize review fatigue, VulnFlow provides two advanced remediation intelligence capabilities:
+
+### 13.1 Multi-Dependency Campaign PRs
+- **Batching & Isolation**: When multiple dependency plans are approved (`len(dep_plans) > 1`), `fix_node` automatically creates a single consolidated campaign branch (`vulnflow/campaign-{run_id[:8]}`) instead of scattering disparate branches across the repository.
+- **Atomic Manifest Updates**: All dependency upgrades are applied sequentially and committed together in a unified commit.
+- **Single Pull Request**: `pr_node` synthesizes a single, comprehensive Pull Request using `format_campaign_pr_body`. The PR description features an executive remediation matrix table, cited advisories, collapsible package details, and verified build evidence.
+
+### 13.2 Autonomous Code Refactoring via FixerAgent
+- **Breaking API Detection**: When an upgraded dependency introduces breaking changes, sandboxed `build_test` fails.
+- **Automated Codemods**: `test_node` triggers `FixerAgent.attempt_code_refactor`, which parses compiler diagnostics and stack traces (`parse_test_failure`), locates failing call sites, and synthesizes compatible replacements via deterministic codemod rules or bounded LLM generation (`_synthesize_refactor`).
+- **Autonomous Healing & Retesting**: The refactored code is committed to git, recorded in `plan.evidence` (`type: "code_refactor"`), and re-tested in the sandbox. If the re-test passes, the break is healed automatically without human intervention. If unresolvable, the failure falls back to conservative retry or human review escalation (`analyze_failure_and_correct`).

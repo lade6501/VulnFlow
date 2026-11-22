@@ -156,3 +156,4 @@ Record changes to this file here (date, ID, what changed, who). Adding, removing
 | 2026-11-21 | F43 | Add enterprise run reporting and AI remediation intelligence to the feature registry | Agent |
 | 2026-11-21 | F43 | Implement canonical evidence-backed JSON, HTML, and Markdown reporting; status remains todo because repository-wide ruff/mypy baselines and the missing make test target block the definition of done | Agent |
 | 2026-11-22 | F43 | Complete canonical enterprise reporting, deterministic builder, advisory validation, CLI output isolation, and security test suite; all 70 tests pass | Agent |
+| 2026-11-22 | F43-EXT | Implement autonomous code refactoring via FixerAgent (Capability 1) and multi-dependency campaign PRs (Capability 2); 79 tests pass | Agent |
