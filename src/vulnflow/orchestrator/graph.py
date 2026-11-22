@@ -178,12 +178,14 @@ class VulnFlowWorkflow:
                     return state
 
                 # 7. Fix & Test loop
+                next_route = "pr"
                 while True:
                     state = self._run_node("fix", state)
                     state = self._run_node("test", state)
                     route = route_after_test(state)
 
-                    if route == "pr":
+                    if route in ("pr", "verify"):
+                        next_route = route
                         break
                     elif route == "fix":
                         logger.warning("Test failed; retrying fix iteration %d", state.retry_count)
@@ -197,8 +199,9 @@ class VulnFlowWorkflow:
                         )
                         return state
 
-                # 8. PR creation
-                state = self._run_node("pr", state)
+                # 8. PR creation (dry-run routes directly to verification)
+                if next_route == "pr":
+                    state = self._run_node("pr", state)
 
                 # 9. Verification rescan
                 state = self._run_node("verify", state)
@@ -330,7 +333,7 @@ def build_graph() -> Any:
         workflow.add_conditional_edges(
             "test",
             route_after_test,
-            {"pr": "pr", "fix": "fix", "exception": "exception"},
+            {"pr": "pr", "verify": "verify", "fix": "fix", "exception": "exception"},
         )
         workflow.add_edge("pr", "verify")
         workflow.add_edge("verify", END)

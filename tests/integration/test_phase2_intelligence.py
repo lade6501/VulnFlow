@@ -259,24 +259,24 @@ def test_f09_findings_report_markdown_and_json(tmp_path_factory: Any = None) -> 
 
     # 1. Test Markdown Report
     md_content = generate_markdown_report(result)
-    assert "# 🛡️ VulnFlow Vulnerability Remediation Report" in md_content
-    assert "Executive Summary" in md_content
-    assert "Findings Grouped by Root Cause" in md_content
+    assert "# VulnFlow Enterprise Run Report" in md_content
+    assert "Summary of findings and risk" in md_content
+    assert "Root-cause remediation summaries" in md_content
     assert "npm:lodash" in md_content
-    assert "AUTO" in md_content
-    assert "APPROVED" in md_content
+    assert "auto" in md_content
+    assert "approved" in md_content
 
     # 2. Test JSON Report
     json_data = generate_json_report(result)
     assert json_data["schema_version"] == "1.0.0"
-    assert json_data["status"] == "completed"
-    assert len(json_data["root_cause_groups"]) >= 1
+    assert json_data["header"]["outcome"] == "completed"
+    assert len(json_data["root_causes"]) >= 1
 
-    rc_grp = json_data["root_cause_groups"][0]
+    rc_grp = json_data["root_causes"][0]
     assert "root_cause_id" in rc_grp
     assert "risk_tier" in rc_grp
-    assert "policy_result" in rc_grp
-    assert len(rc_grp["findings"]) >= 1
+    assert json_data["policy_and_compliance"]["policy_status"] == "approved"
+    assert len(rc_grp["associated_finding_ids"]) >= 1
 
     # 3. Test writing reports to disk
     with tempfile.TemporaryDirectory() as tmp_dir:

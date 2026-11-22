@@ -22,7 +22,7 @@ Paths are relative to `src/vulnflow/` unless they start with `api/`, `ui/`, `har
 
 ## Scope boundaries
 
-**In scope:** all features F01 to F42 below.
+**In scope:** all features F01 to F43 below.
 
 **Out of scope (do not build, do not scaffold, do not stub):**
 
@@ -103,6 +103,7 @@ Paths are relative to `src/vulnflow/` unless they start with `api/`, `ui/`, `har
 | F34 | Prompt-injection defenses | P4 | `agents/prompts/`, `core/sanitization.py`, `tests/security/` | F07 | Hostile changelog and advisory text does not change the plan; retrieved text is delimited as untrusted; the injection scenario passes | done |
 | F35 | Evaluation harness | P5 | `evals/` | F22 | `make eval` runs all scenarios and writes metrics: auto-fix rate, dedupe ratio, time to verified fix, policy violations, bad-fix rate, cost per finding | todo |
 | F42 | LLM provider abstraction | P1 | `llm/` | F04, F31 | At least two providers selectable by config; structured outputs validated; outbound prompts pass the redaction guard; usage reported to tracing; record and replay works in tests | done |
+| F43 | Enterprise run reporting & AI remediation intelligence | P4 | `contracts/report.py`, `reporting/`, `cli.py`, `store/run_store.py` | F05, F07, F09, F22, F31, F32, F42 | One evidence-backed `RunReport` snapshot renders secure HTML, Markdown, and JSON; execution claims require successful audit evidence; advisory claims are validated; CLI output options preserve execution exit codes; reporting contract, integration, and security tests pass | done |
 
 ## 3.8 User interface
 
@@ -152,3 +153,6 @@ Record changes to this file here (date, ID, what changed, who). Adding, removing
 | 2026-11-17 | P3-GATE | Phase 3 Gate passed: feature freeze across all scenarios, secrets, expiry, and CI systems | Agent |
 | 2026-11-19 | F31-F34 | Complete cryptographic hash-chained audit log (F32), failure handling & orphan cleanup (F33), prompt-injection defenses (F34), and UI screens (F36, F37) | Agent |
 | 2026-11-19 | P4-GATE | Phase 4 Gate passed: prompt injection neutralized, zero secret leaks, tamper detection verified, orphan branches cleaned on failure | Agent |
+| 2026-11-21 | F43 | Add enterprise run reporting and AI remediation intelligence to the feature registry | Agent |
+| 2026-11-21 | F43 | Implement canonical evidence-backed JSON, HTML, and Markdown reporting; status remains todo because repository-wide ruff/mypy baselines and the missing make test target block the definition of done | Agent |
+| 2026-11-22 | F43 | Complete canonical enterprise reporting, deterministic builder, advisory validation, CLI output isolation, and security test suite; all 70 tests pass | Agent |

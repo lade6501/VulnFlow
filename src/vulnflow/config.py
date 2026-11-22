@@ -60,6 +60,8 @@ class LLMProviderConfig:
     enable_guard: bool = True
     recorder_mode: str = "LIVE"  # LIVE, RECORD, REPLAY, AUTO
     recorder_dir: str = "evals/recorded_llm"
+    planner_enrichment_mode: str = "selective"  # off, selective, all
+    planner_max_calls_per_run: int = 3
     extra_headers: Dict[str, str] = field(default_factory=dict)
 
 
@@ -160,6 +162,14 @@ class VulnFlowConfig:
         enable_guard = os.getenv("VULNFLOW_LLM_REDACTION_GUARD", "true").lower() in ("1", "true", "yes")
         recorder_mode = os.getenv("VULNFLOW_LLM_RECORDER_MODE", "LIVE").upper()
         recorder_dir = os.getenv("VULNFLOW_LLM_RECORD_DIR", "evals/recorded_llm")
+        planner_enrichment_mode = os.getenv(
+            "VULNFLOW_PLANNER_LLM_ENRICHMENT", "selective"
+        ).lower()
+        if planner_enrichment_mode not in {"off", "selective", "all"}:
+            planner_enrichment_mode = "selective"
+        planner_max_calls_per_run = max(
+            0, int(os.getenv("VULNFLOW_PLANNER_LLM_MAX_CALLS_PER_RUN", "3"))
+        )
 
         # Resolve provider-specific keys and base URLs
         api_key = None
@@ -192,6 +202,8 @@ class VulnFlowConfig:
             enable_guard=enable_guard,
             recorder_mode=recorder_mode,
             recorder_dir=recorder_dir,
+            planner_enrichment_mode=planner_enrichment_mode,
+            planner_max_calls_per_run=planner_max_calls_per_run,
         )
 
         # Role mappings

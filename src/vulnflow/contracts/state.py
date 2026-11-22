@@ -158,10 +158,12 @@ class VulnFlowState:
             "actor": actor,
             "payload": payload,
         }
-        self.audit_events.append(event_dict)
-        audit_logger.log(
+        persisted_event = audit_logger.log(
             run_id=self.run_id,
             event_type=event_type,
             actor=actor,
             payload={"node": self.current_node, **payload},
         )
+        event_dict["previous_hash"] = persisted_event.previous_hash
+        event_dict["entry_hash"] = persisted_event.entry_hash
+        self.audit_events.append(event_dict)
