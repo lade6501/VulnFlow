@@ -116,6 +116,8 @@ export interface PendingApprovalItem {
   reason: string;
   rationale: string;
   diff: string;
+  requiredGroups?: string[];
+  satisfiedGroups?: string[];
 }
 
 export async function fetchPendingApprovals(repo?: string): Promise<PendingApprovalItem[]> {
@@ -138,18 +140,28 @@ export async function submitPlanApproval(
   planId: string,
   approved: boolean,
   reviewer: string = 'security-lead',
-  reason: string = 'Authorized by security committee'
-): Promise<boolean> {
+  reason: string = 'Authorized by security committee',
+  reviewerGroup: string = 'security',
+  repoPath?: string
+): Promise<{ ok: boolean; status: string }> {
   try {
     const res = await fetch(`${API_BASE}/api/approvals/${planId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ approved, reviewer, reason, resume: true }),
+      body: JSON.stringify({
+        approved,
+        reviewer,
+        reviewer_group: reviewerGroup,
+        reason,
+        repo_path: repoPath,
+        resume: true,
+      }),
     });
-    return res.ok;
+    const data = res.ok ? await res.json() : {};
+    return { ok: res.ok, status: data.status || (approved ? 'approved' : 'rejected') };
   } catch (err) {
     console.warn('API call failed, operating in mock mode', err);
-    return true;
+    return { ok: false, status: 'error' };
   }
 }
 

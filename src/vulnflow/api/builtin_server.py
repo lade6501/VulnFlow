@@ -10,10 +10,12 @@ import http.server
 import json
 import logging
 import mimetypes
-from pathlib import Path
 import sys
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
+
+from pydantic import BaseModel, ValidationError
 
 # Ensure project root is in sys.path
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -24,6 +26,10 @@ from api.routes.approvals import list_pending_approvals, submit_approval
 from api.routes.graph import get_graph_data
 from api.routes.runs import get_run, get_run_report, list_runs, trigger_run
 from api.routes.webhooks import handle_scan_webhook
+from vulnflow.contracts.approval import (
+    ApprovalDecisionRequest,
+    PendingApprovalListResponse,
+)
 
 logger = logging.getLogger("vulnflow.api.server")
 
@@ -38,18 +44,26 @@ class VulnFlowBuiltinHandler(http.server.BaseHTTPRequestHandler):
         """Redirect request logging to python logging module at DEBUG level."""
         logger.debug("%s - %s", self.address_string(), format % args)
 
-    def _set_cors_headers(self, content_type: str = "application/json", length: int = 0) -> None:
+    def _set_cors_headers(
+        self, content_type: str = "application/json", length: int = 0
+    ) -> None:
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(length))
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
+        self.send_header(
+            "Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE"
+        )
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
 
     def _send_json(self, status: int, data: Any) -> None:
+        if isinstance(data, BaseModel):
+            data = data.model_dump(mode="json", by_alias=True, exclude_none=True)
         raw = json.dumps(data, default=str).encode("utf-8")
         self.send_response(status)
-        self._set_cors_headers(content_type="application/json; charset=utf-8", length=len(raw))
+        self._set_cors_headers(
+            content_type="application/json; charset=utf-8", length=len(raw)
+        )
         self.wfile.write(raw)
 
     def _send_bytes(self, status: int, body: bytes, content_type: str) -> None:
@@ -71,7 +85,14 @@ class VulnFlowBuiltinHandler(http.server.BaseHTTPRequestHandler):
         try:
             # 1. Health check
             if path == "/health":
-                self._send_json(200, {"status": "healthy", "service": "vulnflow-api", "engine": "builtin"})
+                self._send_json(
+                    200,
+                    {
+                        "status": "healthy",
+                        "service": "vulnflow-api",
+                        "engine": "builtin",
+                    },
+                )
                 return
 
             # 2. List runs
@@ -89,7 +110,9 @@ class VulnFlowBuiltinHandler(http.server.BaseHTTPRequestHandler):
                     if report:
                         self._send_json(200, {"run_id": run_id, "report": report})
                     else:
-                        self._send_json(404, {"detail": f"Report for run {run_id} not found"})
+                        self._send_json(
+                            404, {"detail": f"Report for run {run_id} not found"}
+                        )
                     return
 
             # 4. Single run details
@@ -105,7 +128,10 @@ class VulnFlowBuiltinHandler(http.server.BaseHTTPRequestHandler):
             # 5. List approvals
             if path == "/api/approvals":
                 repo = params.get("repo", [""])[0]
-                self._send_json(200, {"plans": list_pending_approvals(repo_path=repo or None)})
+                response = PendingApprovalListResponse(
+                    plans=list_pending_approvals(repo_path=repo or None)
+                )
+                self._send_json(200, response)
                 return
 
             # 6. Graph data
@@ -150,13 +176,19 @@ class VulnFlowBuiltinHandler(http.server.BaseHTTPRequestHandler):
             # 3. Approve plan
             if path.startswith("/api/approvals/"):
                 plan_id = path.strip("/").split("/")[-1]
+                try:
+                    request_model = ApprovalDecisionRequest.model_validate(body)
+                except ValidationError as exc:
+                    self._send_json(422, {"detail": exc.errors()})
+                    return
                 res = submit_approval(
                     plan_id=plan_id,
-                    approved=body.get("approved", True),
-                    reviewer=body.get("reviewer", "security-lead"),
-                    reason=body.get("reason", "Approved via API"),
-                    repo_path=body.get("repo_path", "."),
-                    resume=body.get("resume", True),
+                    approved=request_model.approved,
+                    reviewer=request_model.reviewer,
+                    reviewer_group=request_model.reviewer_group,
+                    reason=request_model.reason,
+                    repo_path=request_model.repo_path,
+                    resume=request_model.resume,
                 )
                 self._send_json(200, res)
                 return
@@ -185,7 +217,9 @@ class VulnFlowBuiltinHandler(http.server.BaseHTTPRequestHandler):
     </div>
 </body>
 </html>"""
-            self._send_bytes(200, placeholder.encode("utf-8"), "text/html; charset=utf-8")
+            self._send_bytes(
+                200, placeholder.encode("utf-8"), "text/html; charset=utf-8"
+            )
             return
 
         rel = path.lstrip("/")
@@ -212,7 +246,9 @@ class VulnFlowBuiltinHandler(http.server.BaseHTTPRequestHandler):
         self._send_bytes(200, index_file.read_bytes(), "text/html; charset=utf-8")
 
 
-def run_builtin_server(host: str = "0.0.0.0", port: int = 8000, dist_dir: Optional[Path] = None) -> None:
+def run_builtin_server(
+    host: str = "0.0.0.0", port: int = 8000, dist_dir: Path | None = None
+) -> None:
     """Start the multi-threaded HTTP server."""
     if dist_dir is None:
         repo_root = Path(__file__).resolve().parent.parent.parent.parent

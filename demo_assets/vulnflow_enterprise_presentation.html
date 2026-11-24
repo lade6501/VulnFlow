@@ -1,0 +1,2304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VulnFlow AI – 3D Keynote Architecture & Agentic Remediation</title>
+  <style>
+    /* =========================================================
+       DUAL THEME DESIGN SYSTEM (DARK OBSIDIAN & LIGHT TITANIUM)
+       ========================================================= */
+    :root {
+      /* Dark Theme (Default) */
+      --bg-dark: #080C14;
+      --bg-surface: #0F172A;
+      --bg-card: rgba(17, 24, 39, 0.78);
+      --bg-card-hover: rgba(30, 41, 59, 0.9);
+      --border-subtle: rgba(51, 65, 85, 0.65);
+      --border-accent: rgba(16, 185, 129, 0.5);
+      --text-main: #F8FAFC;
+      --text-muted: #94A3B8;
+      --text-dim: #64748B;
+      --emerald: #10B981;
+      --emerald-glow: rgba(16, 185, 129, 0.3);
+      --cyan: #06B6D4;
+      --cyan-glow: rgba(6, 182, 212, 0.3);
+      --blue: #3B82F6;
+      --amber: #F59E0B;
+      --amber-glow: rgba(245, 158, 11, 0.3);
+      --rose: #F43F5E;
+      --purple: #8B5CF6;
+      --purple-glow: rgba(139, 92, 246, 0.3);
+      --card-shadow: 0 25px 60px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      --header-bg: rgba(8, 12, 20, 0.88);
+      --narration-bg: rgba(11, 15, 25, 0.95);
+      --terminal-bg: #050811;
+      --terminal-header: #0f172a;
+      --terminal-text: #cbd5e1;
+      --grid-line: rgba(255, 255, 255, 0.025);
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    body.light-theme {
+      /* Executive Light Titanium Theme */
+      --bg-dark: #F1F5F9;
+      --bg-surface: #FFFFFF;
+      --bg-card: rgba(255, 255, 255, 0.9);
+      --bg-card-hover: rgba(248, 250, 252, 0.98);
+      --border-subtle: rgba(203, 213, 225, 0.85);
+      --border-accent: rgba(5, 150, 105, 0.5);
+      --text-main: #0F172A;
+      --text-muted: #334155;
+      --text-dim: #64748B;
+      --emerald: #059669;
+      --emerald-glow: rgba(5, 150, 105, 0.2);
+      --cyan: #0284C7;
+      --cyan-glow: rgba(2, 132, 199, 0.2);
+      --blue: #2563EB;
+      --amber: #D97706;
+      --amber-glow: rgba(217, 119, 6, 0.2);
+      --rose: #E11D48;
+      --purple: #7C3AED;
+      --purple-glow: rgba(124, 58, 237, 0.2);
+      --card-shadow: 0 20px 45px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.95);
+      --header-bg: rgba(255, 255, 255, 0.88);
+      --narration-bg: rgba(255, 255, 255, 0.95);
+      --terminal-bg: #0F172A;
+      --terminal-header: #1E293B;
+      --terminal-text: #F1F5F9;
+      --grid-line: rgba(15, 23, 42, 0.035);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+      -webkit-font-smoothing: antialiased;
+      transition: background-color 0.4s ease, color 0.4s ease;
+    }
+
+    /* Interactive Background Canvas (Particles & Cyber Constellations) */
+    #bgCanvas {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .ambient-grid {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image: 
+        linear-gradient(var(--grid-line) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+      background-size: 44px 44px;
+      z-index: 1;
+    }
+
+    /* Top Navigation Header */
+    header {
+      height: 58px;
+      padding: 0 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border-subtle);
+      background: var(--header-bg);
+      backdrop-filter: blur(16px);
+      z-index: 30;
+      flex-shrink: 0;
+      transition: background-color 0.4s ease, border-color 0.4s ease;
+    }
+
+    .logo-badge {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+    }
+
+    .logo-icon {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, var(--emerald), var(--cyan));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 14px var(--emerald-glow);
+      font-size: 15px;
+      transform: perspective(600px) translateZ(10px);
+      transition: transform 0.3s ease;
+    }
+
+    /* logo hover transform removed */
+
+    .header-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .btn {
+      padding: 6px 13px;
+      border-radius: 7px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-card);
+      color: var(--text-main);
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+    }
+
+    .btn:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--cyan);
+      box-shadow: 0 4px 10px rgba(6, 182, 212, 0.1);
+    }
+
+    .btn:active {
+      transform: translateY(0.5px);
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #059669, #0d9488);
+      border: 1px solid #10b981;
+      color: #fff;
+      box-shadow: 0 4px 14px var(--emerald-glow);
+    }
+
+    .btn-primary:hover {
+      background: linear-gradient(135deg, #10b981, #14b8a6);
+      box-shadow: 0 0 14px var(--emerald-glow);
+    }
+
+    .btn-video-active {
+      background: linear-gradient(135deg, #7c3aed, #4f46e5);
+      border-color: #a855f7;
+      color: #fff;
+      animation: pulse-video-border 2s infinite;
+    }
+
+    @keyframes pulse-video-border {
+      0%, 100% { box-shadow: 0 0 10px rgba(168, 85, 247, 0.4); }
+      50% { box-shadow: 0 0 22px rgba(168, 85, 247, 0.8); }
+    }
+
+    /* =========================================================
+       PRESENTATION VIEWPORT & POWERPOINT TRANSITIONS
+       ========================================================= */
+    main {
+      flex: 1;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px 36px;
+      z-index: 10;
+      overflow: hidden;
+    }
+
+    .slide-viewport {
+      width: 100%;
+      max-width: 1380px;
+      height: 100%;
+      max-height: 760px;
+      position: relative;
+      cursor: pointer; /* Clicking advances the next build */
+    }
+
+    /* Slide Component */
+    .slide {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      background: var(--bg-card);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 36px 44px;
+      box-shadow: var(--card-shadow);
+      overflow-y: auto;
+      will-change: transform, opacity;
+      transition: 
+        transform 0.52s cubic-bezier(0.16, 1, 0.3, 1),
+        opacity 0.42s ease,
+        border-color 0.3s ease,
+        background 0.3s ease;
+    }
+
+    /* Slide States for Transitions (PowerPoint Slide Transitions) */
+    .slide.active {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translate3d(0, 0, 0);
+      z-index: 2;
+    }
+
+    /* Exit to the left (forward navigation) */
+    .slide.exit-left {
+      opacity: 0;
+      transform: translate3d(-75px, 0, 0);
+      z-index: 1;
+    }
+
+    /* Exit to the right (backward navigation) */
+    .slide.exit-right {
+      opacity: 0;
+      transform: translate3d(75px, 0, 0);
+      z-index: 1;
+    }
+
+    /* =========================================================
+       POWERPOINT CONTENT ENTRANCE ANIMATIONS (.ppt-item)
+       ========================================================= */
+    .ppt-item {
+      opacity: 0;
+      transform: translateY(24px);
+      transition: 
+        opacity 0.45s cubic-bezier(0.16, 1, 0.3, 1), 
+        transform 0.45s cubic-bezier(0.16, 1, 0.3, 1),
+        border-color 0.35s ease,
+        box-shadow 0.35s ease;
+      will-change: transform, opacity;
+      pointer-events: none;
+    }
+
+    .ppt-item.revealed {
+      opacity: 1;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+
+    /* Highlight glow when a build item first appears */
+    .ppt-item.just-revealed {
+      border-color: var(--cyan) !important;
+      box-shadow: 0 0 16px var(--cyan-glow), var(--card-shadow) !important;
+    }
+
+    /* When builds are disabled or printing */
+    body.builds-disabled .ppt-item,
+    @media print {
+      .ppt-item {
+        opacity: 1 !important;
+        transform: none !important;
+        pointer-events: auto !important;
+        transition: none !important;
+      }
+    }
+
+    /* Slide Header */
+    .slide-tagline {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1.4px;
+      color: var(--emerald);
+      margin-bottom: 8px;
+    }
+
+    .slide-title {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.6px;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      transform-style: preserve-3d;
+    }
+
+    .slide-subtitle {
+      font-size: 14.5px;
+      color: var(--text-muted);
+      margin-top: 5px;
+      max-width: 950px;
+      line-height: 1.5;
+    }
+
+    .slide-body {
+      flex: 1;
+      margin-top: 22px;
+      margin-bottom: 14px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      transform-style: preserve-3d;
+    }
+
+    /* Grid Layouts */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; transform-style: preserve-3d; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; transform-style: preserve-3d; }
+    .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; transform-style: preserve-3d; }
+
+    /* 3D Glassmorphic Cards */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 20px;
+      transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), 
+                  box-shadow 0.28s cubic-bezier(0.16, 1, 0.3, 1),
+                  border-color 0.25s ease,
+                  background 0.3s ease;
+      position: relative;
+      overflow: hidden;
+      transform-style: preserve-3d;
+      transform: translateZ(10px);
+    }
+
+    .card:hover {
+      border-color: var(--cyan);
+      box-shadow: 0 4px 14px rgba(6, 182, 212, 0.1);
+    }
+
+    .card-accent-emerald { border-left: 4px solid var(--emerald); }
+    .card-accent-cyan { border-left: 4px solid var(--cyan); }
+    .card-accent-amber { border-left: 4px solid var(--amber); }
+    .card-accent-purple { border-left: 4px solid var(--purple); }
+    .card-accent-rose { border-left: 4px solid var(--rose); }
+
+    .card-title {
+      font-size: 15.5px;
+      font-weight: 700;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .card-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    .metric-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-dim);
+      margin-bottom: 6px;
+    }
+
+    /* Badges */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 8px;
+      border-radius: 5px;
+      font-size: 11px;
+      font-weight: 600;
+      font-family: var(--font-mono);
+      transition: all 0.2s ease;
+    }
+
+    .badge-emerald { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35); }
+    .badge-cyan { background: rgba(6, 182, 212, 0.15); color: #38bdf8; border: 1px solid rgba(6, 182, 212, 0.35); }
+    .badge-amber { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35); }
+    .badge-rose { background: rgba(244, 63, 94, 0.15); color: #fb7185; border: 1px solid rgba(244, 63, 94, 0.35); }
+    .badge-purple { background: rgba(139, 92, 246, 0.15); color: #c084fc; border: 1px solid rgba(139, 92, 246, 0.35); }
+
+    body.light-theme .badge-emerald { background: rgba(5, 150, 105, 0.12); color: #047857; border-color: rgba(5, 150, 105, 0.3); }
+    body.light-theme .badge-cyan { background: rgba(2, 132, 199, 0.12); color: #0369a1; border-color: rgba(2, 132, 199, 0.3); }
+    body.light-theme .badge-amber { background: rgba(217, 119, 6, 0.12); color: #b45309; border-color: rgba(217, 119, 6, 0.3); }
+    body.light-theme .badge-rose { background: rgba(225, 29, 72, 0.12); color: #be123c; border-color: rgba(225, 29, 72, 0.3); }
+    body.light-theme .badge-purple { background: rgba(124, 58, 237, 0.12); color: #6d28d9; border-color: rgba(124, 58, 237, 0.3); }
+
+    /* =========================================================
+       3D ISOMETRIC ARCHITECTURE EXPLOSION VIEW (SLIDE 4)
+       ========================================================= */
+    .iso-stage {
+      position: relative;
+      transition: all 0.8s cubic-bezier(0.19, 1, 0.22, 1);
+      transform-style: preserve-3d;
+    }
+
+    .iso-stage.iso-active {
+      transform: perspective(1400px) rotateX(48deg) rotateZ(-26deg) translateY(-25px) scale(0.92);
+    }
+
+    .iso-stage.iso-active .iso-tier-1 { transform: translateZ(0px); box-shadow: -15px 25px 40px rgba(0,0,0,0.5); }
+    .iso-stage.iso-active .iso-tier-2 { transform: translateZ(55px); box-shadow: -15px 25px 40px rgba(0,0,0,0.5); }
+    .iso-stage.iso-active .iso-tier-3 { transform: translateZ(110px); box-shadow: -15px 25px 40px rgba(0,0,0,0.5); }
+    .iso-stage.iso-active .iso-tier-4 { transform: translateZ(165px); box-shadow: -15px 25px 40px rgba(0,0,0,0.5); }
+
+    .iso-stage.iso-active .card:hover {
+      border-color: var(--cyan);
+    }
+
+    /* 3D State Machine Graphic */
+    .state-machine-container {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 18px;
+      margin-top: 8px;
+      transform-style: preserve-3d;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+    }
+
+    .flow-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 14px;
+      transform-style: preserve-3d;
+    }
+
+    .node-box {
+      flex: 1;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 9px;
+      padding: 10px 8px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+      position: relative;
+      transform-style: preserve-3d;
+    }
+
+    .node-box:hover, .node-box.active-node {
+      border-color: var(--cyan);
+      box-shadow: 0 0 14px var(--cyan-glow);
+    }
+
+    .node-box.pulse-node {
+      border-color: var(--amber);
+      box-shadow: 0 0 16px var(--amber-glow);
+      animation: pulse-gate 2s infinite ease-in-out;
+    }
+
+    @keyframes pulse-gate {
+      0%, 100% { box-shadow: 0 0 6px var(--amber-glow); transform: translate3d(0, 0, 10px); }
+      50% { box-shadow: 0 0 20px var(--amber-glow); transform: translate3d(0, -3px, 20px); }
+    }
+
+    .node-num {
+      font-size: 10px;
+      font-family: var(--font-mono);
+      color: var(--text-dim);
+      font-weight: 700;
+    }
+
+    .node-name {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-main);
+      margin-top: 2px;
+    }
+
+    .flow-arrow {
+      color: var(--text-dim);
+      font-size: 14px;
+      font-weight: bold;
+      animation: pulse-arrow 1.8s infinite;
+    }
+
+    @keyframes pulse-arrow {
+      0%, 100% { opacity: 0.4; transform: translateX(0); }
+      50% { opacity: 1; transform: translateX(3px); }
+    }
+
+    .node-detail-panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 9px;
+      padding: 14px 18px;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 60px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+    }
+
+    /* Terminal Simulation */
+    .terminal-window {
+      background: var(--terminal-bg);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      overflow: hidden;
+      box-shadow: 0 20px 45px rgba(0,0,0,0.45);
+      transform-style: preserve-3d;
+      transform: translateZ(15px);
+    }
+
+    .terminal-header {
+      background: var(--terminal-header);
+      padding: 9px 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .term-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .term-red { background: #ef4444; }
+    .term-yellow { background: #f59e0b; }
+    .term-green { background: #10b981; }
+
+    .terminal-body {
+      padding: 18px;
+      line-height: 1.65;
+      color: var(--terminal-text);
+      min-height: 240px;
+      max-height: 270px;
+      overflow-y: auto;
+    }
+
+    .term-prompt { color: #38bdf8; font-weight: bold; }
+    .term-success { color: #34d399; }
+    .term-warn { color: #fbbf24; }
+    .term-accent { color: #c084fc; }
+
+    /* Video Narration Bar */
+    .narration-bar {
+      height: 64px;
+      background: var(--narration-bg);
+      border-top: 1px solid var(--border-subtle);
+      padding: 0 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      z-index: 30;
+      flex-shrink: 0;
+      backdrop-filter: blur(16px);
+      transition: background-color 0.4s ease, border-color 0.4s ease;
+    }
+
+    .narrator-avatar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+
+    .audio-waves {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      height: 18px;
+      opacity: 0.35;
+      transition: opacity 0.3s ease;
+    }
+
+    .audio-waves.waves-active {
+      opacity: 1 !important;
+    }
+
+    .wave-bar {
+      width: 3px;
+      height: 100%;
+      background: var(--cyan);
+      border-radius: 2px;
+      transform: scaleY(0.2);
+      transition: transform 0.15s ease;
+    }
+
+    .audio-waves.waves-active .wave-bar {
+      animation: sound-bounce 0.8s infinite ease-in-out;
+    }
+
+    .audio-waves.waves-active .wave-bar:nth-child(2) { animation-delay: 0.15s; }
+    .audio-waves.waves-active .wave-bar:nth-child(3) { animation-delay: 0.3s; }
+    .audio-waves.waves-active .wave-bar:nth-child(4) { animation-delay: 0.1s; }
+
+    @keyframes sound-bounce {
+      0%, 100% { transform: scaleY(0.2); }
+      50% { transform: scaleY(1); }
+    }
+
+    .narration-text {
+      flex: 1;
+      font-size: 13.5px;
+      color: var(--text-main);
+      font-style: italic;
+      line-height: 1.4;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .narration-text span {
+      color: var(--cyan);
+      font-weight: 700;
+      font-style: normal;
+    }
+
+    .slide-progress-container {
+      width: 140px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+
+    .progress-track {
+      height: 4px;
+      background: var(--border-subtle);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--emerald), var(--cyan));
+      border-radius: 2px;
+      transition: width 0.1s linear;
+    }
+
+    .progress-numbers {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--text-dim);
+    }
+
+    /* Speaker Notes Modal */
+    .notes-drawer {
+      position: fixed;
+      bottom: 74px;
+      right: 24px;
+      width: 440px;
+      max-height: 380px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 14px;
+      box-shadow: 0 25px 60px rgba(0,0,0,0.4);
+      z-index: 50;
+      padding: 20px;
+      display: none;
+      backdrop-filter: blur(24px);
+      flex-direction: column;
+    }
+
+    .notes-drawer.open { display: flex; animation: drawerPop 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+
+    @keyframes drawerPop {
+      0% { opacity: 0; transform: translateY(15px) scale(0.96); }
+      100% { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .notes-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border-subtle);
+      margin-bottom: 12px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--cyan);
+    }
+
+    .notes-body {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.6;
+      overflow-y: auto;
+    }
+
+    /* Print Styles */
+    @media print {
+      body {
+        overflow: visible !important;
+        height: auto !important;
+        background: #080C14 !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+      header, .narration-bar, .notes-drawer, #bgCanvas, .ambient-grid {
+        display: none !important;
+      }
+      main {
+        padding: 0 !important;
+        display: block !important;
+      }
+      .slide-viewport {
+        max-width: 100% !important;
+        max-height: 100% !important;
+        height: auto !important;
+        transform: none !important;
+      }
+      .slide {
+        position: relative !important;
+        opacity: 1 !important;
+        transform: none !important;
+        display: flex !important;
+        page-break-after: always !important;
+        break-after: page !important;
+        margin-bottom: 40px !important;
+        height: 675px !important;
+        border: 1px solid #334155 !important;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Dynamic Particle Canvas -->
+  <canvas id="bgCanvas"></canvas>
+  <div class="ambient-grid"></div>
+
+  <!-- Header Bar -->
+  <header>
+    <div class="logo-badge">
+      <div class="logo-icon">🛡️</div>
+      <span>VulnFlow AI</span>
+      <span class="badge badge-emerald">3D KEYNOTE</span>
+    </div>
+
+    <div class="header-controls">
+      <button id="btnPrev" class="btn" title="Previous Slide (← or P)">◀ Prev</button>
+      <span id="slideCounter" style="font-family: var(--font-mono); font-size: 13px; color: var(--text-muted); padding: 0 4px;">01 / 10</span>
+      <button id="btnNext" class="btn" title="Next Slide (→ or Space)">Next ▶</button>
+      
+      <div style="width: 1px; height: 20px; background: var(--border-subtle); margin: 0 4px;"></div>
+      
+      <button id="btnVideoMode" class="btn btn-primary" title="Toggle Auto-Play Animated Video Demo">
+        <span id="videoPlayIcon">▶</span> <span id="videoBtnText">Auto-Play Video Demo</span>
+      </button>
+
+      <button id="btnSoundToggle" class="btn" title="Toggle Voiceover Sound (M)">
+        <span id="soundIcon">🔊</span> <span id="soundText">Sound: ON</span>
+      </button>
+
+      <button id="btnTestAudio" class="btn" title="Click to test audio & voiceover immediately">
+        <span style="color: #38bdf8;">⚡</span> Test Sound
+      </button>
+
+      <button id="btnBuildToggle" class="btn" title="Toggle PowerPoint Content Animations / Builds (B)">
+        <span id="buildIcon">✨</span> <span id="buildText">Builds: ON</span>
+      </button>
+
+      <button id="btnThemeToggle" class="btn" title="Switch between Light & Dark Mode (T)">
+        <span id="themeIcon">☀️</span> <span id="themeText">Light Mode</span>
+      </button>
+
+      <button id="btnNotes" class="btn" title="Toggle Presenter Notes (S)">🎙️ Notes</button>
+      <button id="btnPrint" class="btn" title="Print or Save as High-Res PDF Deck">📄 PDF</button>
+      <button id="btnFullscreen" class="btn" title="Fullscreen Mode (F)">⛶</button>
+    </div>
+  </header>
+
+  <!-- Slide Viewport (3D Stage) -->
+  <main id="mainContainer">
+    <div class="slide-viewport" id="slideViewport">
+
+      <!-- SLIDE 1: HERO / TITLE -->
+      <section class="slide active" id="slide-1" data-duration="16" 
+               data-narration="Welcome to VulnFlow AI: the autonomous, agentic remediation layer for modern cloud security that transforms vulnerability scanner alerts into verified, policy-compliant pull requests.">
+        <div>
+          <div class="slide-tagline">🚀 Autonomous Security Engineering</div>
+          <h1 class="slide-title" style="font-size: 38px;">
+            VulnFlow AI
+          </h1>
+          <p class="slide-subtitle" style="font-size: 17px;">
+            Autonomous, Agentic Vulnerability Remediation Platform
+          </p>
+        </div>
+
+        <div class="slide-body">
+          <div class="grid-3" style="margin-bottom: 24px;">
+            <div class="card card-accent-emerald ppt-item">
+              <div class="card-title">🛡️ Closed-Loop Remediation</div>
+              <p class="card-desc">LLM proposes, deterministic tools execute, and security scanners verify. Zero pull requests are opened without sandbox test validation.</p>
+            </div>
+            <div class="card card-accent-cyan ppt-item">
+              <div class="card-title">🤖 10-Node State Machine</div>
+              <p class="card-desc">Built on LangGraph with state interrupts, human approval gates, FastMCP tool servers, and automated self-correction rollback loops.</p>
+            </div>
+            <div class="card card-accent-purple ppt-item">
+              <div class="card-title">📐 Deterministic Governance</div>
+              <p class="card-desc">Hard policy enforcement for approved packages, SemVer constraints, and license compliance in code—eliminating LLM hallucinations.</p>
+            </div>
+          </div>
+
+          <div class="ppt-item" style="display: flex; gap: 12px; align-items: center; justify-content: center; background: var(--bg-surface); padding: 14px; border-radius: 9px; border: 1px solid var(--border-subtle);">
+            <span class="badge badge-cyan">FastMCP JSON-RPC Protocol</span>
+            <span class="badge badge-emerald">Neo4j Graph Root-Cause Traversal</span>
+            <span class="badge badge-amber">Interruptible Human Gate (Exit 10)</span>
+            <span class="badge badge-purple">Multi-LLM Swappable Abstraction</span>
+          </div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 14px;">
+          <span>CONFIDENTIAL • VULNFLOW ARCHITECTURE WORKING GROUP</span>
+          <span>ADVANCED 3D KEYNOTE</span>
+        </div>
+      </section>
+
+      <!-- SLIDE 2: THE PROBLEM -->
+      <section class="slide" id="slide-2" data-duration="20"
+               data-narration="Modern vulnerability scanning creates a severe productivity bottleneck for engineering teams. Developers are overwhelmed by duplicate alerts across multiple scanners, cascading transitive dependencies, breaking changes from blind bot upgrades, and complex corporate policy constraints.">
+        <div>
+          <div class="slide-tagline" style="color: var(--rose);">⚠️ The Engineering Bottleneck</div>
+          <h2 class="slide-title">The Developer Productivity Trap: Remediation Toil</h2>
+          <p class="slide-subtitle">Modern security scanning creates visibility, but product engineers bear the crushing operational burden of manual triage and broken builds.</p>
+        </div>
+
+        <div class="slide-body">
+          <div class="grid-4" style="margin-bottom: 20px;">
+            <div class="card card-accent-rose ppt-item">
+              <div class="card-title" style="color: var(--rose);">🔍 Multi-Scanner Noise</div>
+              <p class="card-desc" style="margin-top: 6px;">Trivy, Grype, Snyk, and Gitleaks output fragmented, duplicate reports. Engineers waste sprint hours manually correlating CVE IDs across different tools.</p>
+              <div style="margin-top: 10px;"><span class="badge badge-rose">Alert Fatigue</span></div>
+            </div>
+
+            <div class="card card-accent-amber ppt-item">
+              <div class="card-title" style="color: var(--amber);">🌳 Transitive Explosion</div>
+              <p class="card-desc" style="margin-top: 6px;">A single deep transitive dependency triggers alerts across dozens of packages. Developers spend days tracing lockfiles trying to find the direct parent manifest.</p>
+              <div style="margin-top: 10px;"><span class="badge badge-amber">Transitive Chaos</span></div>
+            </div>
+
+            <div class="card card-accent-purple ppt-item">
+              <div class="card-title" style="color: var(--purple);">💥 Blind Upgrade Breaks</div>
+              <p class="card-desc" style="margin-top: 6px;">Traditional automated bots bump version numbers blindly. Breaking API changes trigger compiler and test failures, stalling CI/CD pipelines.</p>
+              <div style="margin-top: 10px;"><span class="badge badge-purple">Broken CI Builds</span></div>
+            </div>
+
+            <div class="card card-accent-cyan ppt-item">
+              <div class="card-title" style="color: var(--cyan);">⚖️ Policy & License Risk</div>
+              <p class="card-desc" style="margin-top: 6px;">Upgrades frequently pull in unvetted packages, incompatible SemVer jumps, or restrictive copyleft licenses (GPL/AGPL) that breach corporate policy.</p>
+              <div style="margin-top: 10px;"><span class="badge badge-cyan">Governance Friction</span></div>
+            </div>
+          </div>
+
+          <div class="card ppt-item" style="background: var(--bg-surface); border-color: rgba(239, 68, 68, 0.4);">
+            <div class="card-title" style="color: var(--rose); font-size: 14px;">🚨 The Core Problem: Detection is Solved. Remediation is Broken.</div>
+            <p class="card-desc" style="font-size: 13px;">Security teams don't need another dashboard full of red badges. Engineering teams need an autonomous, trustworthy system that safely formulates, sandbox-tests, and verifies code fixes before opening pull requests.</p>
+          </div>
+        </div>
+
+        <div style="font-size: 12px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 14px;">
+          <span>SLIDE 02 / 10 • THE DEVELOPER PRODUCTIVITY TRAP</span>
+        </div>
+      </section>
+
+      <!-- SLIDE 3: MARKET COMPARISON & DIFFERENTIATION -->
+      <section class="slide" id="slide-3" data-duration="22"
+               data-narration="How is VulnFlow different from existing solutions in the market? While scanners only detect vulnerabilities, dependency bots bump versions blindly without testing, and generic AI hallucinates code, VulnFlow combines multi-agent reasoning, deterministic policy rails, and sandboxed self-correction with rescan verification.">
+        <div>
+          <div class="slide-tagline">⚔️ Market Differentiation</div>
+          <h2 class="slide-title">How VulnFlow Compares to Existing Market Solutions</h2>
+          <p class="slide-subtitle">A fundamental paradigm shift from passive scanning and blind version bumps to closed-loop verifiable remediation.</p>
+        </div>
+
+        <div class="slide-body">
+          <div class="grid-4" style="gap: 16px; margin-bottom: 20px;">
+            <!-- Category 1: Scanners -->
+            <div class="card ppt-item" style="border-color: rgba(100, 116, 139, 0.5);">
+              <div class="badge" style="background: rgba(100, 116, 139, 0.2); color: var(--text-dim); margin-bottom: 8px;">DETECTION ONLY</div>
+              <div class="card-title" style="font-size: 15px;">Static Scanners</div>
+              <div style="font-size: 11.5px; color: var(--text-dim); margin-bottom: 8px;">Trivy, Snyk, Grype, Veracode</div>
+              <ul style="list-style: none; font-size: 12px; line-height: 1.6; color: var(--text-muted);">
+                <li>• ❌ Alert dumps with zero code fixes</li>
+                <li>• ❌ No transitive root-cause grouping</li>
+                <li>• ❌ Leaves 100% manual toil to engineers</li>
+              </ul>
+            </div>
+
+            <!-- Category 2: Bots -->
+            <div class="card ppt-item" style="border-color: rgba(245, 158, 11, 0.4);">
+              <div class="badge badge-amber" style="margin-bottom: 8px;">BLIND BUMPERS</div>
+              <div class="card-title" style="font-size: 15px; color: var(--amber);">Dependency Bots</div>
+              <div style="font-size: 11.5px; color: var(--text-dim); margin-bottom: 8px;">Dependabot, Renovate</div>
+              <ul style="list-style: none; font-size: 12px; line-height: 1.6; color: var(--text-muted);">
+                <li>• ⚠️ Bumps versions without sandboxing</li>
+                <li>• ❌ High rate of broken CI builds</li>
+                <li>• ❌ Ignores corporate whitelist policies</li>
+                <li>• ❌ No post-fix rescan verification</li>
+              </ul>
+            </div>
+
+            <!-- Category 3: Generic AI -->
+            <div class="card ppt-item" style="border-color: rgba(139, 92, 246, 0.4);">
+              <div class="badge badge-purple" style="margin-bottom: 8px;">UNCONSTRAINED AI</div>
+              <div class="card-title" style="font-size: 15px; color: var(--purple);">Generic LLM Tools</div>
+              <div style="font-size: 11.5px; color: var(--text-dim); margin-bottom: 8px;">Copilot, ChatGPT, Raw Prompts</div>
+              <ul style="list-style: none; font-size: 12px; line-height: 1.6; color: var(--text-muted);">
+                <li>• ❌ Hallucinates fake package versions</li>
+                <li>• ❌ Exposes plain secrets in prompt context</li>
+                <li>• ❌ No deterministic policy enforcement</li>
+                <li>• ❌ Unbounded, unverified code edits</li>
+              </ul>
+            </div>
+
+            <!-- Category 4: VulnFlow AI -->
+            <div class="card card-accent-emerald ppt-item" style="border-color: var(--emerald);">
+              <div class="badge badge-emerald" style="margin-bottom: 8px;">VERIFIED REMEDIATION</div>
+              <div class="card-title" style="font-size: 15px; color: var(--emerald);">🛡️ VulnFlow AI</div>
+              <div style="font-size: 11.5px; color: var(--emerald); margin-bottom: 8px;">Autonomous Agentic Platform</div>
+              <ul style="list-style: none; font-size: 12px; line-height: 1.6; color: var(--text-main);">
+                <li>• ✅ Neo4j transitive root-cause collapse</li>
+                <li>• ✅ Deterministic code policy whitelist</li>
+                <li>• ✅ Ephemeral sandbox self-correction</li>
+                <li>• ✅ Automated rescan diff verification</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="ppt-item" style="background: var(--bg-surface); border: 1px solid var(--emerald); border-radius: 9px; padding: 12px 18px; text-align: center;">
+            <span style="font-weight: 700; color: var(--emerald); font-size: 14px;">The Architectural Difference:</span>
+            <span style="color: var(--text-main); font-size: 14px; margin-left: 8px;">"LLMs propose candidate upgrades. Deterministic tools execute actions in a sandbox. Scanners verify ground truth."</span>
+          </div>
+        </div>
+
+        <div style="font-size: 12px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 14px;">
+          <span>SLIDE 03 / 10 • MARKET COMPARISON & DIFFERENTIATION</span>
+        </div>
+      </section>
+
+      <!-- SLIDE 4: SYSTEM ARCHITECTURE (WITH 3D ISOMETRIC VIEW) -->
+      <section class="slide" id="slide-4" data-duration="20"
+               data-narration="VulnFlow's 4-tier architecture separates scanner ingest and edge secret redaction, multi-agent orchestration in LangGraph, isolated FastMCP tool execution, and sandboxed verification.">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+          <div>
+            <div class="slide-tagline">🏛️ Technical Architecture</div>
+            <h2 class="slide-title">4-Tier Enterprise Architecture</h2>
+            <p class="slide-subtitle">Strict boundary isolation between generative intelligence, deterministic policy, and sandboxed execution.</p>
+          </div>
+          <button id="btnToggle3DView" class="btn btn-primary" style="font-size: 11.5px;" title="Toggle between 3D Layered Isometric Explosion and Flat Grid">
+            <span>🕹️</span> <span id="toggle3DText">Explode 3D Isometric View</span>
+          </button>
+        </div>
+
+        <div class="slide-body">
+          <div class="grid-4 iso-stage" id="isoArchitectureStage" style="gap: 16px;">
+            <!-- Tier 1 -->
+            <div class="card card-accent-cyan iso-tier-1 ppt-item">
+              <div class="badge badge-cyan" style="margin-bottom: 8px;">TIER 1 • INGESTION</div>
+              <div class="card-title">Scanner Adapters & Redaction</div>
+              <p class="card-desc">Parses SARIF & JSON from Trivy, Grype, Gitleaks, and Snyk. Immediately redacts all secrets and API tokens so plaintext never touches LLMs.</p>
+            </div>
+
+            <!-- Tier 2 -->
+            <div class="card card-accent-emerald iso-tier-2 ppt-item">
+              <div class="badge badge-emerald" style="margin-bottom: 8px;">TIER 2 • ORCHESTRATION</div>
+              <div class="card-title">LangGraph & Multi-Agent Swarm</div>
+              <p class="card-desc">Interruptible state machine coordinating specialized agents (Triage, Root-Cause, Planner, Fixer, Verifier) with state persistence and human review gates.</p>
+            </div>
+
+            <!-- Tier 3 -->
+            <div class="card card-accent-amber iso-tier-3 ppt-item">
+              <div class="badge badge-amber" style="margin-bottom: 8px;">TIER 3 • TOOLS (FastMCP)</div>
+              <div class="card-title">FastMCP Tool Servers</div>
+              <p class="card-desc">Side-effects strictly isolated via Model Context Protocol JSON-RPC stdio servers: Git, Build Sandbox, Policy, Scanner, and Jira ticketing.</p>
+            </div>
+
+            <!-- Tier 4 -->
+            <div class="card card-accent-purple iso-tier-4 ppt-item">
+              <div class="badge badge-purple" style="margin-bottom: 8px;">TIER 4 • VERIFICATION</div>
+              <div class="card-title">Sandbox & Knowledge RAG</div>
+              <p class="card-desc">Ephemeral container sandbox executes builds, runs unit tests, and triggers rescan diffs against Neo4j dependency graphs and advisory vector stores.</p>
+            </div>
+          </div>
+
+          <!-- Architecture Visual Flow -->
+          <div class="ppt-item" style="margin-top: 16px; background: var(--bg-surface); border: 1px dashed var(--border-subtle); border-radius: 9px; padding: 14px; display: flex; align-items: center; justify-content: space-around; font-family: var(--font-mono); font-size: 11px;">
+            <div style="text-align: center;"><span style="color: #38bdf8; font-weight: 700;">CI Pipelines</span><br><span style="color: var(--text-dim);">GitHub/GitLab/Jenkins</span></div>
+            <div class="flow-arrow">➔</div>
+            <div style="text-align: center;"><span style="color: #34d399; font-weight: 700;">VulnFlow Container</span><br><span style="color: var(--text-dim);">Single Entrypoint</span></div>
+            <div class="flow-arrow">➔</div>
+            <div style="text-align: center;"><span style="color: #c084fc; font-weight: 700;">FastMCP Client</span><br><span style="color: var(--text-dim);">Zero-Dependency stdio</span></div>
+            <div class="flow-arrow">➔</div>
+            <div style="text-align: center;"><span style="color: #fbbf24; font-weight: 700;">Ephemeral Sandbox</span><br><span style="color: var(--text-dim);">Self-Correction Loop</span></div>
+            <div class="flow-arrow">➔</div>
+            <div style="text-align: center;"><span style="color: #34d399; font-weight: 700;">Verified GitHub PR</span><br><span style="color: var(--text-dim);">With Rescan Diff</span></div>
+          </div>
+        </div>
+
+        <div style="font-size: 12px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 14px;">
+          <span>SLIDE 04 / 10 • 4-TIER ENTERPRISE ARCHITECTURE</span>
+        </div>
+      </section>
+
+      <!-- SLIDE 5: THE 10-NODE STATE MACHINE -->
+      <section class="slide" id="slide-5" data-duration="24"
+               data-narration="Here is VulnFlow's ten-node remediation state machine. Each finding is ingested, deduplicated, grouped by direct root-cause, checked against policy, tested in an ephemeral sandbox, and verified via rescan diff.">
+        <div>
+          <div class="slide-tagline">⚙️ Operational State Machine</div>
+          <h2 class="slide-title">The 10-Node Autonomous Remediation Flow</h2>
+          <p class="slide-subtitle">Interactive state graph. Click any node below to inspect its invariants, inputs, and agent constraints.</p>
+        </div>
+
+        <div class="slide-body">
+          <div class="state-machine-container">
+            <!-- Row 1 -->
+            <div class="flow-row ppt-item">
+              <div class="node-box" data-node="ingest" onclick="selectNode('ingest')">
+                <div class="node-num">NODE 01</div>
+                <div class="node-name">📥 Ingest</div>
+              </div>
+              <div class="flow-arrow">➔</div>
+              <div class="node-box" data-node="dedupe" onclick="selectNode('dedupe')">
+                <div class="node-num">NODE 02</div>
+                <div class="node-name">🧹 Dedupe</div>
+              </div>
+              <div class="flow-arrow">➔</div>
+              <div class="node-box" data-node="rootcause" onclick="selectNode('rootcause')">
+                <div class="node-num">NODE 03</div>
+                <div class="node-name">🌳 Root Cause</div>
+              </div>
+              <div class="flow-arrow">➔</div>
+              <div class="node-box" data-node="policy" onclick="selectNode('policy')">
+                <div class="node-num">NODE 04</div>
+                <div class="node-name">⚖️ Policy Check</div>
+              </div>
+              <div class="flow-arrow">➔</div>
+              <div class="node-box" data-node="plan" onclick="selectNode('plan')">
+                <div class="node-num">NODE 05</div>
+                <div class="node-name">📝 Plan Node</div>
+              </div>
+            </div>
+
+            <!-- Row 2 -->
+            <div class="flow-row ppt-item">
+              <div class="node-box pulse-node" data-node="approval" onclick="selectNode('approval')">
+                <div class="node-num">NODE 06</div>
+                <div class="node-name" style="color: var(--amber);">🚦 Approval Gate</div>
+              </div>
+              <div class="flow-arrow">➔</div>
+              <div class="node-box" data-node="sandbox" onclick="selectNode('sandbox')">
+                <div class="node-num">NODE 07</div>
+                <div class="node-name">🧪 Sandbox Loop</div>
+              </div>
+              <div class="flow-arrow">➔</div>
+              <div class="node-box" data-node="pr" onclick="selectNode('pr')">
+                <div class="node-num">NODE 08</div>
+                <div class="node-name">🚀 PR Creation</div>
+              </div>
+              <div class="flow-arrow">➔</div>
+              <div class="node-box" data-node="verify" onclick="selectNode('verify')">
+                <div class="node-num">NODE 09</div>
+                <div class="node-name" style="color: var(--emerald);">🔍 Verify Diff</div>
+              </div>
+              <div class="flow-arrow">➔</div>
+              <div class="node-box" data-node="audit" onclick="selectNode('audit')">
+                <div class="node-num">NODE 10</div>
+                <div class="node-name">📊 Audit & Close</div>
+              </div>
+            </div>
+
+            <!-- Dynamic Node Info Panel -->
+            <div id="nodeDetailPanel" class="node-detail-panel ppt-item">
+              <div>
+                <span id="detailBadge" class="badge badge-amber">NODE 06 • HUMAN APPROVAL GATE</span>
+                <div id="detailTitle" style="font-weight: 700; color: var(--text-main); margin-top: 4px; font-size: 14px;">Human Authorization & State Checkpointing</div>
+                <div id="detailText" style="color: var(--text-muted); font-size: 12.5px; margin-top: 2px;">
+                  Pauses workflow on REVIEW-tier changes (major bumps, unknown packages). Emits Exit Code 10, saves pending_state.json, and awaits <code>vulnflow approve</code>.
+                </div>
+              </div>
+              <div id="detailExtra" style="text-align: right; font-family: var(--font-mono); font-size: 11px; color: var(--text-dim);">
+                <div>INVARIANT: No PR opened without approval</div>
+                <div style="color: var(--emerald); font-weight: 700;">STATUS: Gate Active</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style="font-size: 12px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 14px;">
+          <span>SLIDE 05 / 10 • 10-NODE STATE MACHINE</span>
+        </div>
+      </section>
+
+      <!-- SLIDE 6: AGENTIC AI CAPABILITIES -->
+      <section class="slide" id="slide-6" data-duration="22"
+               data-narration="VulnFlow's agentic AI goes far beyond generic chat models. Specialized agents operate within bounded invariants, utilizing autonomous self-correction loops to analyze compiler errors, roll back breaking changes, and re-test compatible versions before opening a PR.">
+        <div>
+          <div class="slide-tagline">🧠 Agentic Intelligence</div>
+          <h2 class="slide-title">Agentic AI Capabilities & Autonomous Self-Correction</h2>
+          <p class="slide-subtitle">Goal-driven autonomous agents with bounded responsibilities, multi-step reasoning, and error recovery.</p>
+        </div>
+
+        <div class="slide-body">
+          <div class="grid-3" style="margin-bottom: 20px;">
+            <div class="card card-accent-cyan ppt-item">
+              <div class="card-title">🌳 Root-Cause Agent</div>
+              <p class="card-desc">Traverses dependency graphs in Neo4j to find the direct parent dependency causing transitive CVEs, eliminating duplicate work.</p>
+              <div style="margin-top: 10px;"><span class="badge badge-cyan">Graph RAG Traversal</span></div>
+            </div>
+
+            <div class="card card-accent-emerald ppt-item">
+              <div class="card-title">🔄 Self-Correcting Fixer</div>
+              <p class="card-desc">When sandbox tests or builds fail, the agent inspects compiler logs, analyzes breaking API changes, rolls back, and retries safer versions.</p>
+              <div style="margin-top: 10px;"><span class="badge badge-emerald">Closed-Loop Self-Healing</span></div>
+            </div>
+
+            <div class="card card-accent-purple ppt-item">
+              <div class="card-title">🔒 Secrets & Expiry Agents</div>
+              <p class="card-desc">Automatically discovers leaking secrets or expiring TLS certs, generates rotation playbooks, and predicts failures before scanners trigger.</p>
+              <div style="margin-top: 10px;"><span class="badge badge-purple">Proactive Remediation</span></div>
+            </div>
+          </div>
+
+          <!-- Self-Correction Flow Diagram -->
+          <div class="card ppt-item" style="background: var(--bg-surface); border-color: var(--border-subtle);">
+            <div class="card-title" style="font-size: 14px; color: var(--emerald);">🔁 The Autonomous Self-Correction Loop in Action:</div>
+            <div style="display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; margin-top: 8px;">
+              <div style="background: var(--bg-card); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-subtle);">1. Planner bumps <code>Django 4.2 ➔ 5.2</code></div>
+              <span class="flow-arrow">➔</span>
+              <div style="background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.4); padding: 8px 12px; border-radius: 6px; color: var(--rose);">2. Sandbox tests fail (Breaking API)</div>
+              <span class="flow-arrow">➔</span>
+              <div style="background: rgba(6, 182, 212, 0.12); border: 1px solid rgba(6, 182, 212, 0.4); padding: 8px 12px; border-radius: 6px; color: var(--cyan);">3. Agent diagnoses error & falls back to <code>5.0.12</code></div>
+              <span class="flow-arrow">➔</span>
+              <div style="background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.4); padding: 8px 12px; border-radius: 6px; color: var(--emerald);">4. Sandbox tests pass • PR Created</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="font-size: 12px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 14px;">
+          <span>SLIDE 06 / 10 • AGENTIC CAPABILITIES</span>
+        </div>
+      </section>
+
+      <!-- SLIDE 7: ENTERPRISE GOVERNANCE & SAFETY -->
+      <section class="slide" id="slide-7" data-duration="20"
+               data-narration="Enterprise adoption requires ironclad safety. VulnFlow enforces deterministic policy in code, calculates three risk tiers, and redacts all secrets at the ingestion boundary.">
+        <div>
+          <div class="slide-tagline" style="color: var(--amber);">🛡️ Safety, Trust & Governance</div>
+          <h2 class="slide-title">Deterministic Policy & Human-in-the-Loop Gates</h2>
+          <p class="slide-subtitle">Giving enterprise security leaders total control with verifiable risk boundaries and zero model hallucinations.</p>
+        </div>
+
+        <div class="slide-body">
+          <div class="grid-3" style="margin-bottom: 20px;">
+            <!-- Policy Engine -->
+            <div class="card card-accent-emerald ppt-item">
+              <div class="card-title">📜 Code-First Policy Engine</div>
+              <p class="card-desc">All package whitelists, SemVer bounds, and license rules (e.g. GPL-3.0 restrictions) are executed in pure deterministic code, never by the LLM.</p>
+              <div style="margin-top: 12px; font-family: var(--font-mono); font-size: 11px; color: var(--emerald); font-weight: 700;">
+                Status: APPROVED / DEPRECATED / BANNED
+              </div>
+            </div>
+
+            <!-- Risk Tiers -->
+            <div class="card card-accent-amber ppt-item">
+              <div class="card-title">🚦 3-Tier Risk Model</div>
+              <ul style="list-style: none; font-size: 12px; line-height: 1.7; color: var(--text-muted); margin-top: 6px;">
+                <li>• <b style="color: var(--emerald);">AUTO:</b> Patch bumps with passing tests ➔ PR.</li>
+                <li>• <b style="color: var(--amber);">REVIEW:</b> Major bumps ➔ Pauses (Exit 10).</li>
+                <li>• <b style="color: var(--rose);">BLOCKED:</b> Banned package ➔ Jira ticket (Exit 20).</li>
+              </ul>
+            </div>
+
+            <!-- Redaction -->
+            <div class="card card-accent-cyan ppt-item">
+              <div class="card-title">🔐 Zero-Knowledge Redaction</div>
+              <p class="card-desc">Sensitive secrets, JWTs, and AWS credentials are stripped at the edge. Only fingerprints and line numbers reach prompts, logs, or traces.</p>
+              <div style="margin-top: 12px; font-family: var(--font-mono); font-size: 11px; color: var(--cyan); font-weight: 700;">
+                Security Invariant: Redacted at Ingest
+              </div>
+            </div>
+          </div>
+
+          <!-- Human in the Loop Callout -->
+          <div class="ppt-item" style="background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 9px; padding: 14px; display: flex; align-items: center; justify-content: space-between;">
+            <div>
+              <span style="font-weight: 700; color: var(--amber); font-size: 13.5px;">Interactive Reviewer Resume Command:</span>
+              <div style="font-family: var(--font-mono); font-size: 12px; color: var(--text-main); margin-top: 4px;">
+                <code>vulnflow approve --plan-id PLAN-ebaaef6720e2 --reviewer "sec-lead@corp" --resume</code>
+              </div>
+            </div>
+            <span class="badge badge-amber">EXIT CODE 10 SAFEGUARD</span>
+          </div>
+        </div>
+
+        <div style="font-size: 12px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 14px;">
+          <span>SLIDE 07 / 10 • ENTERPRISE GOVERNANCE</span>
+        </div>
+      </section>
+
+      <!-- SLIDE 8: FASTMCP & ECOSYSTEM -->
+      <section class="slide" id="slide-8" data-duration="18"
+               data-narration="VulnFlow connects seamlessly into existing developer workflows via the FastMCP protocol, drop-in CI/CD pipelines, and multi-provider LLM support.">
+        <div>
+          <div class="slide-tagline">🔌 Integrations & Extensibility</div>
+          <h2 class="slide-title">FastMCP Protocol & Universal CI/CD Integration</h2>
+          <p class="slide-subtitle">Zero vendor lock-in. Modular Anthropic FastMCP servers, single-container CI/CD execution, and swappable LLMs.</p>
+        </div>
+
+        <div class="slide-body">
+          <div class="grid-3" style="margin-bottom: 20px;">
+            <div class="card card-accent-cyan ppt-item">
+              <div class="card-title">⚡ FastMCP Server Suite</div>
+              <p class="card-desc">Standardized tool interfaces over JSON-RPC stdio. Zero third-party pip dependencies required for core tool servers.</p>
+              <div style="margin-top: 10px; font-family: var(--font-mono); font-size: 11px; color: var(--cyan);">
+                git_server • build_server • policy_server • scan_server
+              </div>
+            </div>
+
+            <div class="card card-accent-emerald ppt-item">
+              <div class="card-title">🚢 CI/CD Container Entry</div>
+              <p class="card-desc">Runs as a single Docker container step in GitHub Actions, GitLab CI, or Jenkins. Emits standardized exit codes (0, 10, 20).</p>
+              <div style="margin-top: 10px; font-family: var(--font-mono); font-size: 11px; color: var(--emerald);">
+                <code>./run.sh scan --repo . --mode pr</code>
+              </div>
+            </div>
+
+            <div class="card card-accent-purple ppt-item">
+              <div class="card-title">🔀 Swappable LLM Providers</div>
+              <p class="card-desc">Centralized provider abstraction. Run with NVIDIA NIM, Anthropic Claude, OpenAI, Ollama (air-gapped local), or AWS Bedrock.</p>
+              <div style="margin-top: 10px; font-family: var(--font-mono); font-size: 11px; color: var(--purple);">
+                Role-based model routing & offline fallback
+              </div>
+            </div>
+          </div>
+
+          <div class="card ppt-item" style="background: var(--bg-surface);">
+            <div class="card-title" style="font-size: 14px;">🖥️ Unified Management: CLI, Web UI & REST API</div>
+            <p class="card-desc">Security teams can monitor active runs, inspect dependency graphs, and approve pending plans via the built-in React web dashboard (<code>vulnflow serve</code>) or programmatic REST endpoints.</p>
+          </div>
+        </div>
+
+        <div style="font-size: 12px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 14px;">
+          <span>SLIDE 08 / 10 • INTEGRATIONS & FASTMCP</span>
+        </div>
+      </section>
+
+      <!-- SLIDE 9: LIVE EXECUTION WALKTHROUGH -->
+      <section class="slide" id="slide-9" data-duration="24"
+               data-narration="In this live execution walkthrough, VulnFlow scans a repository, collapses thirty-eight raw Trivy findings into a single direct parent dependency, tests the patch in an isolated container, and opens a verified GitHub pull request with zero residual CVEs.">
+        <div>
+          <div class="slide-tagline">💻 Live Execution Demo</div>
+          <h2 class="slide-title">End-to-End Execution Walkthrough</h2>
+          <p class="slide-subtitle">Simulated real-world execution of <code>vulnflow scan --repo demo-app --mode pr</code>.</p>
+        </div>
+
+        <div class="slide-body">
+          <div class="terminal-window">
+            <div class="terminal-header">
+              <div class="term-dot term-red"></div>
+              <div class="term-dot term-yellow"></div>
+              <div class="term-dot term-green"></div>
+              <span style="font-size: 11px; color: var(--text-dim); margin-left: 8px;">bash – vulnflow scan --repo fake-vuln-repo --mode pr</span>
+            </div>
+            <div class="terminal-body" id="termOutput">
+              <div class="ppt-item" style="margin-bottom: 6px;">
+                <span class="term-prompt">user@devsecops:~$</span> vulnflow scan --repo fake-vuln-repo --mode pr<br>
+                <span style="color: var(--text-dim);">[00:01] 🔍 [Ingest] Ingesting Trivy scanner report (38 findings detected)...</span><br>
+                <span style="color: var(--text-dim);">[00:02] 🧹 [Dedupe] Collapsed 38 findings ➔ 6 distinct CVEs.</span><br>
+                <span class="term-accent">[00:03] 🌳 [RootCause] Neo4j graph traversal identified root cause direct parent: axios@0.21.1</span>
+              </div>
+              <div class="ppt-item" style="margin-bottom: 6px;">
+                <span class="term-success">[00:04] ⚖️ [Policy] Evaluating corporate whitelist: axios ➔ target allowed (>=1.7.4)</span><br>
+                <span style="color: var(--text-dim);">[00:05] 📝 [Plan] Formulating RemediationPlan [PLAN-SEC-8f3a]: bump axios 0.21.1 ➔ 1.7.4</span><br>
+                <span class="term-warn">[00:06] 🚦 [RiskTier] Calculated tier: AUTO (patch verified within SemVer bounds)</span><br>
+                <span style="color: var(--text-dim);">[00:07] 🧪 [Sandbox] Spawning ephemeral container; running npm test & build...</span><br>
+                <span class="term-success">[00:10] ✅ [Sandbox] Build & 42 unit tests passed cleanly (0 errors).</span>
+              </div>
+              <div class="ppt-item">
+                <span class="term-accent">[00:11] 🚀 [PR] Created branch vulnflow/fix-axios-cve; opened GitHub PR #42</span><br>
+                <span class="term-success">[00:13] 🔍 [Verify] Triggering rescan diff: 0 remaining CVEs. VERIFICATION_SUCCESS!</span><br>
+                <span class="term-success">====================================================================</span><br>
+                <span class="term-success">🛡️  VulnFlow Execution Summary: RUN-8a4e19b SUCCESS (Exit Code: 0)</span><br>
+                <span class="term-success">====================================================================</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style="font-size: 12px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 14px;">
+          <span>SLIDE 09 / 10 • LIVE EXECUTION DEMO</span>
+        </div>
+      </section>
+
+      <!-- SLIDE 10: DEVELOPER PRODUCTIVITY & CONCLUSION -->
+      <section class="slide" id="slide-10" data-duration="20"
+               data-narration="The ultimate value of VulnFlow AI is developer productivity. By automating the mechanical toil of alert triage, compatibility testing, and verification, engineering teams eliminate broken builds, ensure total policy compliance, and refocus their sprint hours on shipping product features.">
+        <div>
+          <div class="slide-tagline" style="color: var(--emerald);">🚀 Developer Productivity Impact</div>
+          <h2 class="slide-title">Reclaiming Engineering Velocity from Remediation Toil</h2>
+          <p class="slide-subtitle">Transforming security from an engineering bottleneck into an automated, verified pipeline advantage.</p>
+        </div>
+
+        <div class="slide-body">
+          <div class="grid-4" style="margin-bottom: 24px;">
+            <div class="card card-accent-emerald ppt-item">
+              <div class="card-title" style="color: var(--emerald);">🧹 Zero Triage Toil</div>
+              <div class="metric-label">Root-Cause Collapsing</div>
+              <p class="card-desc" style="margin-top: 8px;">Neo4j graph RAG collapses dozens of cascading transitive CVE alerts into one direct parent fix. Developers review 1 coherent PR instead of 30 duplicate tickets.</p>
+              <div style="margin-top: 10px;"><span class="badge badge-emerald">Toil Eliminated</span></div>
+            </div>
+
+            <div class="card card-accent-cyan ppt-item">
+              <div class="card-title" style="color: var(--cyan);">🛡️ Zero Broken CI Builds</div>
+              <div class="metric-label">Pre-Tested Sandboxing</div>
+              <p class="card-desc" style="margin-top: 8px;">Every patch is pre-compiled and tested against your unit test suite in an ephemeral container before a PR is opened. Developers never debug broken bot PRs.</p>
+              <div style="margin-top: 10px;"><span class="badge badge-cyan">Pipeline Integrity</span></div>
+            </div>
+
+            <div class="card card-accent-purple ppt-item">
+              <div class="card-title" style="color: var(--purple);">🔄 Self-Healing Fixes</div>
+              <div class="metric-label">Autonomous Recovery</div>
+              <p class="card-desc" style="margin-top: 8px;">When a version introduces breaking changes, the agent reads compiler errors, automatically rolls back, and finds conservative compatible SemVer versions.</p>
+              <div style="margin-top: 10px;"><span class="badge badge-purple">Closed-Loop AI</span></div>
+            </div>
+
+            <div class="card card-accent-amber ppt-item">
+              <div class="card-title" style="color: var(--amber);">⚖️ 100% Policy Guarantees</div>
+              <div class="metric-label">Deterministic Rails</div>
+              <p class="card-desc" style="margin-top: 8px;">Whitelists, SemVer bounds, and software licenses are enforced by deterministic Python code—eliminating model hallucinations and legal friction.</p>
+              <div style="margin-top: 10px;"><span class="badge badge-amber">Compliance By Code</span></div>
+            </div>
+          </div>
+
+          <div class="ppt-item" style="display: flex; gap: 16px; align-items: center; justify-content: space-between; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 9px; padding: 18px 24px;">
+            <div>
+              <div style="font-weight: 800; font-size: 15px; color: var(--text-main);">The Core Takeaway for Product & Security Leaders:</div>
+              <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Developers are hired to ship revenue features, not debug dependency locks. VulnFlow AI offloads the toil: <code>vulnflow scan --repo . --mode pr</code></div>
+            </div>
+            <button class="btn btn-primary" onclick="goToSlide(0)">Restart Presentation ↺</button>
+          </div>
+        </div>
+
+        <div style="font-size: 12px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 14px;">
+          <span>SLIDE 10 / 10 • DEVELOPER PRODUCTIVITY & CONCLUSION</span>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- Video Narration & Autoplay Control Bar -->
+  <div class="narration-bar">
+    <div class="narrator-avatar">
+      <div class="audio-waves" id="audioWaves" title="Live Audio Waveform">
+        <div class="wave-bar"></div>
+        <div class="wave-bar"></div>
+        <div class="wave-bar"></div>
+        <div class="wave-bar"></div>
+      </div>
+      <div style="font-size: 12px; font-weight: 700; color: var(--cyan);">AI NARRATOR</div>
+      <select id="voiceSelect" class="btn" style="padding: 2px 6px; font-size: 11px; max-width: 140px;" title="Choose Voiceover Speech Synthesizer Voice">
+        <option value="">Default Voice</option>
+      </select>
+    </div>
+
+    <div class="narration-text" id="narrationDisplay">
+      <span>Voiceover:</span> Welcome to VulnFlow AI: the autonomous, agentic remediation layer for modern cloud security.
+    </div>
+
+    <div class="slide-progress-container">
+      <div class="progress-track">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+      <div class="progress-numbers">
+        <span id="timeElapsed">00:00</span>
+        <span id="timeTotal">02:45</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Speaker Notes Drawer -->
+  <div class="notes-drawer" id="notesDrawer">
+    <div class="notes-header">
+      <span>🎙️ SPEAKER NOTES & TALKING POINTS</span>
+      <button class="btn" style="padding: 2px 8px; font-size: 11px;" onclick="toggleNotes()">✕</button>
+    </div>
+    <div class="notes-body" id="notesContent"></div>
+  </div>
+
+  <script>
+    // ==========================================
+    // AUDIO & SFX SYNTHESIZER (Web Audio API)
+    // ==========================================
+    class SoundEngine {
+      constructor() {
+        this.ctx = null;
+        this.muted = false;
+      }
+
+      init() {
+        try {
+          if (!this.ctx) {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (AudioCtx) this.ctx = new AudioCtx();
+          }
+          if (this.ctx && this.ctx.state === 'suspended') {
+            this.ctx.resume();
+          }
+        } catch (e) {
+          console.warn("AudioContext init error:", e);
+        }
+      }
+
+      playTransition() {
+        if (this.muted) return;
+        this.init();
+        if (!this.ctx) return;
+        try {
+          const t = this.ctx.currentTime;
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(280, t);
+          osc.frequency.exponentialRampToValueAtTime(780, t + 0.15);
+          gain.gain.setValueAtTime(0.06, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(t);
+          osc.stop(t + 0.2);
+        } catch (err) {}
+      }
+
+      playSuccess() {
+        if (this.muted) return;
+        this.init();
+        if (!this.ctx) return;
+        try {
+          const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
+          notes.forEach((freq, idx) => {
+            const t = this.ctx.currentTime + (idx * 0.08);
+            const osc = this.ctx.createOscillator();
+            const gain = this.ctx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(freq, t);
+            gain.gain.setValueAtTime(0.08, t);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + 0.32);
+            osc.connect(gain);
+            gain.connect(this.ctx.destination);
+            osc.start(t);
+            osc.stop(t + 0.32);
+          });
+        } catch (err) {}
+      }
+
+      playChirp() {
+        if (this.muted) return;
+        this.init();
+        if (!this.ctx) return;
+        try {
+          const t = this.ctx.currentTime;
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(1100, t);
+          osc.frequency.exponentialRampToValueAtTime(1600, t + 0.06);
+          gain.gain.setValueAtTime(0.04, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(t);
+          osc.stop(t + 0.07);
+        } catch (err) {}
+      }
+
+      playContentEntry() {
+        if (this.muted) return;
+        this.init();
+        if (!this.ctx) return;
+        try {
+          const t = this.ctx.currentTime;
+          const osc = this.ctx.createOscillator();
+          const gain = this.ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(520, t);
+          osc.frequency.exponentialRampToValueAtTime(840, t + 0.07);
+          gain.gain.setValueAtTime(0.035, t);
+          gain.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+          osc.connect(gain);
+          gain.connect(this.ctx.destination);
+          osc.start(t);
+          osc.stop(t + 0.09);
+        } catch (err) {}
+      }
+    }
+
+    const sfx = new SoundEngine();
+
+    // ==========================================
+    // SPEECH SYNTHESIS ENGINE (Voiceover)
+    // ==========================================
+    let isMuted = false;
+    let voices = [];
+    window.activeUtterance = null;
+    let voiceFallbackTimer = null;
+
+    function populateVoices() {
+      if (!('speechSynthesis' in window)) return;
+      voices = window.speechSynthesis.getVoices();
+      const select = document.getElementById('voiceSelect');
+      if (!select) return;
+
+      select.innerHTML = '';
+      const eng = voices.filter(v => v.lang.startsWith('en'));
+      const list = eng.length > 0 ? eng : voices;
+
+      list.forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v.name;
+        opt.textContent = `${v.name} (${v.lang})`;
+        if (v.name.includes('Samantha') || v.name.includes('Google US') || v.name.includes('Daniel') || v.default) {
+          opt.selected = true;
+        }
+        select.appendChild(opt);
+      });
+    }
+
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.onvoiceschanged = populateVoices;
+      populateVoices();
+    }
+
+    function speakNarration(text, onComplete) {
+      if (isMuted || !('speechSynthesis' in window)) {
+        if (onComplete) {
+          voiceFallbackTimer = setTimeout(onComplete, currentSlideDuration * 1000);
+        }
+        return;
+      }
+
+      try {
+        window.speechSynthesis.cancel();
+        if (voiceFallbackTimer) clearTimeout(voiceFallbackTimer);
+
+        const utterance = new SpeechSynthesisUtterance(text);
+        window.activeUtterance = utterance;
+
+        const select = document.getElementById('voiceSelect');
+        if (select && select.value) {
+          const found = voices.find(v => v.name === select.value);
+          if (found) utterance.voice = found;
+        } else {
+          const preferred = voices.find(v => v.name.includes('Samantha') || v.name.includes('Karen') || v.name.includes('Daniel') || v.lang === 'en-US');
+          if (preferred) utterance.voice = preferred;
+        }
+
+        utterance.rate = 1.05;
+        utterance.pitch = 1.0;
+
+        utterance.onstart = () => {
+          const waves = document.getElementById('audioWaves');
+          if (waves) waves.classList.add('waves-active');
+        };
+
+        utterance.onend = () => {
+          const waves = document.getElementById('audioWaves');
+          if (waves) waves.classList.remove('waves-active');
+          window.activeUtterance = null;
+          if (onComplete) onComplete();
+        };
+
+        utterance.onerror = (e) => {
+          console.warn("Speech synthesis ended or interrupted:", e);
+          const waves = document.getElementById('audioWaves');
+          if (waves) waves.classList.remove('waves-active');
+          window.activeUtterance = null;
+          if (onComplete) onComplete();
+        };
+
+        window.speechSynthesis.speak(utterance);
+      } catch (err) {
+        console.error("SpeechSynthesis error:", err);
+        if (onComplete) onComplete();
+      }
+    }
+
+    // ==========================================
+    // DYNAMIC 3D CANVAS PARTICLE NETWORK
+    // ==========================================
+    const canvas = document.getElementById('bgCanvas');
+    const ctx = canvas.getContext('2d');
+    let particles = [];
+    let mouseX = -1000;
+    let mouseY = -1000;
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      initParticles();
+    }
+
+    function initParticles() {
+      particles = [];
+      const count = Math.floor((canvas.width * canvas.height) / 24000);
+      for (let i = 0; i < count; i++) {
+        particles.push({
+          x: Math.random() * canvas.width,
+          y: Math.random() * canvas.height,
+          vx: (Math.random() - 0.5) * 0.45,
+          vy: (Math.random() - 0.5) * 0.45,
+          radius: Math.random() * 2 + 1
+        });
+      }
+    }
+
+    function drawParticles() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const isLight = document.body.classList.contains('light-theme');
+      const dotColor = isLight ? 'rgba(2, 132, 199, 0.35)' : 'rgba(6, 182, 212, 0.4)';
+      const lineColor = isLight ? 'rgba(5, 150, 105, 0.12)' : 'rgba(16, 185, 129, 0.15)';
+
+      for (let i = 0; i < particles.length; i++) {
+        const p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+
+        if (p.x < 0 || p.x > canvas.width) p.vx *= -1;
+        if (p.y < 0 || p.y > canvas.height) p.vy *= -1;
+
+        // Particle gentle float without mouse displacement
+
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        ctx.fillStyle = dotColor;
+        ctx.fill();
+
+        for (let j = i + 1; j < particles.length; j++) {
+          const p2 = particles[j];
+          const d2 = Math.hypot(p.x - p2.x, p.y - p2.y);
+          if (d2 < 110) {
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.strokeStyle = lineColor;
+            ctx.lineWidth = 0.75 * (1 - d2 / 110);
+            ctx.stroke();
+          }
+        }
+      }
+      requestAnimationFrame(drawParticles);
+    }
+
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+    drawParticles();
+
+    // Mouse parallax completely removed for solid executive presentation
+    const mainContainer = document.getElementById('mainContainer');
+    const slideViewport = document.getElementById('slideViewport');
+
+    // ==========================================
+    // PRESENTATION & SLIDE NAVIGATION
+    // ==========================================
+    const speakerNotes = [
+      `<b>Slide 1 Talking Points:</b><br>
+      • Welcome the audience. Introduce VulnFlow AI as an autonomous, agentic security remediation platform.<br>
+      • Key distinction: It does not replace security scanners (Trivy, Grype); it eliminates the manual, repetitive developer toil of fixing what scanners find.<br>
+      • Highlight core pillars: LangGraph state machine, FastMCP protocol tools, and deterministic governance.`,
+
+      `<b>Slide 2 Talking Points:</b><br>
+      • Frame the problem around developer productivity and engineering toil.<br>
+      • Multi-scanner fragmentation: developers waste hours cross-referencing CVE IDs between Trivy, Grype, and Snyk.<br>
+      • Transitive dependency explosion: a deep nested vulnerability causes alerts across dozens of packages.<br>
+      • Blind upgrades from existing bots frequently introduce breaking API changes that break CI/CD pipelines.<br>
+      • Upgrades risk introducing unapproved or restrictive copyleft licenses (GPL/AGPL).`,
+
+      `<b>Slide 3 Talking Points:</b><br>
+      • Walk through the 4 market categories to clearly differentiate VulnFlow.<br>
+      • 1. Scanners (Trivy, Snyk): Detection only, dumping alerts with zero code fixes.<br>
+      • 2. Dependency Bots (Dependabot, Renovate): Blind bumpers that don't pre-test in sandboxes or check enterprise whitelists.<br>
+      • 3. Generic AI (Copilot, ChatGPT): Unbounded prompt generation with risk of hallucinating packages and leaking secrets.<br>
+      • 4. VulnFlow AI: Closed-loop agentic remediation, combining Neo4j root cause grouping, deterministic policy, and sandbox self-correction.`,
+
+      `<b>Slide 4 Talking Points:</b><br>
+      • Walk through the 4 distinct architectural layers. Click "Explode 3D Isometric View" for visual impact!<br>
+      • Tier 1: Ingestion with edge secret redaction (zero plaintext secrets reach LLMs).<br>
+      • Tier 2: LangGraph multi-agent swarm.<br>
+      • Tier 3: Isolated FastMCP tool servers (zero-dependency stdio).<br>
+      • Tier 4: Ephemeral sandbox with Neo4j graph RAG and vector advisory RAG.`,
+
+      `<b>Slide 5 Talking Points:</b><br>
+      • Walk through the 10-node state machine.<br>
+      • Point out Node 03 (Root Cause Grouping) which collapses transitive noise.<br>
+      • Highlight Node 06 (Approval Gate) which enforces human-in-the-loop review for risky changes (Exit Code 10).<br>
+      • Emphasize Node 09 (Verify Diff) where the invariant is strictly enforced.`,
+
+      `<b>Slide 6 Talking Points:</b><br>
+      • Discuss the agentic AI capabilities.<br>
+      • Explain bounded roles: Triage, Root-Cause, Planner, Fixer, Verifier.<br>
+      • Showcase the autonomous self-correction loop: when sandbox builds fail, the agent analyzes the failure and rolls back to a conservative candidate version.`,
+
+      `<b>Slide 7 Talking Points:</b><br>
+      • Address enterprise governance and compliance fears.<br>
+      • The policy engine is 100% deterministic code—zero hallucinations.<br>
+      • 3-Tier risk model: AUTO, REVIEW (pauses execution), BLOCKED (creates Jira ticket, zero PR).<br>
+      • Secrets are stripped at ingestion so sensitive keys never enter model context.`,
+
+      `<b>Slide 8 Talking Points:</b><br>
+      • Discuss enterprise extensibility.<br>
+      • FastMCP protocol tool isolation allows easy integration into Cursor and Claude Desktop.<br>
+      • CI/CD portability: Runs as a single Docker container in GitHub Actions, GitLab CI, or Jenkins.<br>
+      • Multi-LLM provider abstraction: Works with NVIDIA NIM, Claude, OpenAI, Bedrock, or local Ollama.`,
+
+      `<b>Slide 9 Talking Points:</b><br>
+      • Live demo walkthrough.<br>
+      • Show the command <code>vulnflow scan --repo fake-vuln-repo --mode pr</code>.<br>
+      • Point out how 38 Trivy findings collapsed into 6 CVEs and 1 direct root cause.<br>
+      • Show the sandbox test pass and the clean rescan diff resulting in a verified GitHub PR.`,
+
+      `<b>Slide 10 Talking Points:</b><br>
+      • Conclude by connecting architecture directly back to developer velocity.<br>
+      • Reiterate the 4 core developer productivity gains: Zero triage toil, zero broken builds, autonomous self-healing, and 100% deterministic compliance.<br>
+      • Emphasize the core thesis: developers are hired to build features; VulnFlow automates the vulnerability toil safely.<br>
+      • Call to action: Run <code>vulnflow scan --repo . --mode pr</code> or explore the dashboard with <code>vulnflow serve</code>.`
+    ];
+
+    const nodeDetails = {
+      ingest: {
+        badge: "NODE 01 • INGEST ADAPTER",
+        title: "Scanner Parsing & Secret Redaction",
+        text: "Ingests raw SARIF/JSON from Trivy, Grype, Gitleaks, and Snyk. Redacts all tokens and secrets before normalising into Finding models.",
+        invariant: "INVARIANT: Secrets never enter model context"
+      },
+      dedupe: {
+        badge: "NODE 02 • DEDUPLICATION",
+        title: "Deterministic Finding Deduplication",
+        text: "Fingerprints findings across file paths, CVE IDs, and packages to eliminate duplicate alerts across multiple scanner reports.",
+        invariant: "INVARIANT: Deterministic fingerprinting"
+      },
+      rootcause: {
+        badge: "NODE 03 • ROOT CAUSE GRAPH",
+        title: "Transitive Graph Traversal (Neo4j)",
+        text: "Queries the dependency graph to collapse cascading transitive vulnerabilities into their direct top-level parent packages.",
+        invariant: "INVARIANT: Cannot alter graph relationship facts"
+      },
+      policy: {
+        badge: "NODE 04 • DETERMINISTIC POLICY",
+        title: "Package Whitelist & License Enforcement",
+        text: "Evaluates corporate allow/deny lists, allowed SemVer ranges, and software license constraints strictly in deterministic code.",
+        invariant: "INVARIANT: Decisions originate from code, never LLM"
+      },
+      plan: {
+        badge: "NODE 05 • REMEDIATION PLANNER",
+        title: "Grounded Advisory Planning",
+        text: "Combines Vector RAG (security advisories, changelogs) with policy candidates to formulate structured RemediationPlan models.",
+        invariant: "INVARIANT: Cannot select policy-rejected versions"
+      },
+      approval: {
+        badge: "NODE 06 • HUMAN APPROVAL GATE",
+        title: "Human Authorization & State Checkpointing",
+        text: "Pauses workflow on REVIEW-tier changes (major bumps, unknown packages). Emits Exit Code 10, saves pending_state.json, and awaits vulnflow approve.",
+        invariant: "INVARIANT: No PR opened without approval"
+      },
+      sandbox: {
+        badge: "NODE 07 • EPHEMERAL SANDBOX",
+        title: "Sandboxed Build & Self-Correction Loop",
+        text: "Applies patch in an isolated container. Runs builds and unit tests. If tests fail, automatically analyzes errors and retries conservative versions.",
+        invariant: "INVARIANT: Isolated from production filesystem"
+      },
+      pr: {
+        badge: "NODE 08 • PULL REQUEST CREATION",
+        title: "Git Branch & Verifiable PR Generation",
+        text: "Creates git branch, commits verified patch, and opens a GitHub/GitLab PR containing cited advisory evidence and test output.",
+        invariant: "INVARIANT: Side-effects pass strictly via FastMCP"
+      },
+      verify: {
+        badge: "NODE 09 • VERIFICATION NODE",
+        title: "Automated Rescan & Diff Calculation",
+        text: "Executes a clean security rescan on the PR branch. Verifies that target CVEs are eliminated without introducing new vulnerabilities.",
+        invariant: "INVARIANT: Failed rescan is NEVER reported as success"
+      },
+      audit: {
+        badge: "NODE 10 • AUDIT & OBSERVABILITY",
+        title: "Append-Only Audit Log & Trace Emission",
+        text: "Records run metrics, token costs, policy decisions, and tool invocations into an append-only audit trail and OpenTelemetry traces.",
+        invariant: "INVARIANT: Full regulatory compliance auditability"
+      }
+    };
+
+    let currentSlide = 0;
+    const slides = document.querySelectorAll('.slide');
+    const totalSlides = slides.length;
+    const slideCounter = document.getElementById('slideCounter');
+    const narrationDisplay = document.getElementById('narrationDisplay');
+    const progressFill = document.getElementById('progressFill');
+    const timeElapsed = document.getElementById('timeElapsed');
+    const btnVideoMode = document.getElementById('btnVideoMode');
+    const videoBtnText = document.getElementById('videoBtnText');
+    const videoPlayIcon = document.getElementById('videoPlayIcon');
+    const audioWaves = document.getElementById('audioWaves');
+    const notesDrawer = document.getElementById('notesDrawer');
+    const notesContent = document.getElementById('notesContent');
+    const btnSoundToggle = document.getElementById('btnSoundToggle');
+    const soundIcon = document.getElementById('soundIcon');
+    const soundText = document.getElementById('soundText');
+    const btnTestAudio = document.getElementById('btnTestAudio');
+    const btnThemeToggle = document.getElementById('btnThemeToggle');
+    const themeIcon = document.getElementById('themeIcon');
+    const themeText = document.getElementById('themeText');
+    const btnToggle3DView = document.getElementById('btnToggle3DView');
+    const toggle3DText = document.getElementById('toggle3DText');
+    const isoArchitectureStage = document.getElementById('isoArchitectureStage');
+
+    // Video Autoplay State
+    let isVideoMode = false;
+    let isPaused = false;
+    let videoTimer = null;
+    let slideSecondsLeft = 0;
+    let currentSlideDuration = 15;
+    let totalSecondsElapsed = 0;
+    let isIsometric3D = false;
+
+    // ==========================================
+    // POWERPOINT BUILD & SLIDE NAVIGATION ENGINE
+    // ==========================================
+    let isBuildsEnabled = true;
+    let videoBuildTimers = [];
+
+    const btnBuildToggle = document.getElementById('btnBuildToggle');
+    const buildIcon = document.getElementById('buildIcon');
+    const buildText = document.getElementById('buildText');
+
+    function toggleBuilds() {
+      isBuildsEnabled = !isBuildsEnabled;
+      sfx.playChirp();
+      if (isBuildsEnabled) {
+        document.body.classList.remove('builds-disabled');
+        if (buildIcon) buildIcon.textContent = '✨';
+        if (buildText) buildText.textContent = 'Builds: ON';
+        // Reset builds on active slide
+        const activeSlide = slides[currentSlide];
+        activeSlide.querySelectorAll('.ppt-item').forEach(item => item.classList.remove('revealed', 'just-revealed'));
+      } else {
+        document.body.classList.add('builds-disabled');
+        if (buildIcon) buildIcon.textContent = '⚡';
+        if (buildText) buildText.textContent = 'Builds: OFF';
+        // Reveal all items
+        const activeSlide = slides[currentSlide];
+        activeSlide.querySelectorAll('.ppt-item').forEach(item => item.classList.add('revealed'));
+      }
+      updateBuildCounter();
+    }
+
+    function updateBuildCounter() {
+      const activeSlide = slides[currentSlide];
+      const allItems = activeSlide.querySelectorAll('.ppt-item');
+      const revealedItems = activeSlide.querySelectorAll('.ppt-item.revealed');
+      const total = allItems.length;
+      const current = revealedItems.length;
+
+      if (total > 0 && isBuildsEnabled) {
+        slideCounter.innerHTML = `${String(currentSlide + 1).padStart(2, '0')} / ${String(totalSlides).padStart(2, '0')} <span style="opacity: 0.65; font-size: 11px; margin-left: 6px; font-weight: 600;">[Step ${current}/${total}]</span>`;
+      } else {
+        slideCounter.textContent = `${String(currentSlide + 1).padStart(2, '0')} / ${String(totalSlides).padStart(2, '0')}`;
+      }
+    }
+
+    function clearVideoBuildTimers() {
+      videoBuildTimers.forEach(t => clearTimeout(t));
+      videoBuildTimers = [];
+    }
+
+    function updateSlide(direction = 'forward') {
+      clearVideoBuildTimers();
+
+      slides.forEach((s, idx) => {
+        s.classList.remove('active', 'exit-left', 'exit-right');
+        if (idx === currentSlide) {
+          s.classList.add('active');
+        } else if (idx < currentSlide) {
+          s.classList.add('exit-left');
+        } else {
+          s.classList.add('exit-right');
+        }
+      });
+
+      const activeSlide = slides[currentSlide];
+      const allItems = activeSlide.querySelectorAll('.ppt-item');
+
+      if (isBuildsEnabled) {
+        if (direction === 'forward') {
+          allItems.forEach(item => item.classList.remove('revealed', 'just-revealed'));
+        } else {
+          // Backward navigation reveals all so previous slide starts fully populated
+          allItems.forEach(item => item.classList.add('revealed'));
+        }
+      } else {
+        allItems.forEach(item => item.classList.add('revealed'));
+      }
+
+      updateBuildCounter();
+
+      const narration = activeSlide.getAttribute('data-narration') || '';
+      narrationDisplay.innerHTML = `<span>Voiceover:</span> ${narration}`;
+      notesContent.innerHTML = speakerNotes[currentSlide] || 'No notes for this slide.';
+
+      currentSlideDuration = parseInt(activeSlide.getAttribute('data-duration') || '15', 10);
+      slideSecondsLeft = currentSlideDuration;
+      progressFill.style.width = '0%';
+
+      sfx.playTransition();
+      if (currentSlide === 8 || currentSlide === 9) {
+        setTimeout(() => sfx.playSuccess(), 450);
+      }
+    }
+
+    function advanceStepOrSlide() {
+      if (isBuildsEnabled) {
+        const activeSlide = slides[currentSlide];
+        const unrevealedItems = activeSlide.querySelectorAll('.ppt-item:not(.revealed)');
+        if (unrevealedItems.length > 0) {
+          const nextItem = unrevealedItems[0];
+          nextItem.classList.add('revealed', 'just-revealed');
+          setTimeout(() => nextItem.classList.remove('just-revealed'), 650);
+          sfx.playContentEntry();
+          updateBuildCounter();
+          return;
+        }
+      }
+      nextSlide();
+    }
+
+    function retreatStepOrSlide() {
+      if (isBuildsEnabled) {
+        const activeSlide = slides[currentSlide];
+        const revealedItems = activeSlide.querySelectorAll('.ppt-item.revealed');
+        if (revealedItems.length > 0) {
+          const lastItem = revealedItems[revealedItems.length - 1];
+          lastItem.classList.remove('revealed', 'just-revealed');
+          sfx.playChirp();
+          updateBuildCounter();
+          return;
+        }
+      }
+      prevSlide();
+    }
+
+    function nextSlide() {
+      if (currentSlide < totalSlides - 1) {
+        currentSlide++;
+        updateSlide('forward');
+        if (isVideoMode) {
+          playCurrentSlideInVideoMode();
+        }
+      } else if (isVideoMode) {
+        stopVideoMode();
+      }
+    }
+
+    function prevSlide() {
+      if (currentSlide > 0) {
+        currentSlide--;
+        updateSlide('backward');
+        if (isVideoMode) {
+          playCurrentSlideInVideoMode();
+        }
+      }
+    }
+
+    function goToSlide(idx) {
+      if (idx >= 0 && idx < totalSlides) {
+        const direction = idx > currentSlide ? 'forward' : 'backward';
+        currentSlide = idx;
+        updateSlide(direction);
+        if (isVideoMode) {
+          playCurrentSlideInVideoMode();
+        }
+      }
+    }
+
+    // ==========================================
+    // 3D ISOMETRIC ARCHITECTURE EXPLOSION (SLIDE 4)
+    // ==========================================
+    if (btnToggle3DView && isoArchitectureStage) {
+      btnToggle3DView.addEventListener('click', () => {
+        isIsometric3D = !isIsometric3D;
+        sfx.playChirp();
+        if (isIsometric3D) {
+          isoArchitectureStage.classList.add('iso-active');
+          toggle3DText.textContent = 'Collapse to Flat Grid';
+        } else {
+          isoArchitectureStage.classList.remove('iso-active');
+          toggle3DText.textContent = 'Explode 3D Isometric View';
+        }
+      });
+    }
+
+    // ==========================================
+    // THEME SWITCHER (DARK / LIGHT TITANIUM)
+    // ==========================================
+    function toggleTheme() {
+      const isLight = document.body.classList.toggle('light-theme');
+      sfx.playChirp();
+      if (isLight) {
+        themeIcon.textContent = '🌙';
+        themeText.textContent = 'Dark Mode';
+        localStorage.setItem('vulnflow_theme', 'light');
+      } else {
+        themeIcon.textContent = '☀️';
+        themeText.textContent = 'Light Mode';
+        localStorage.setItem('vulnflow_theme', 'dark');
+      }
+    }
+
+    // Load saved theme
+    if (localStorage.getItem('vulnflow_theme') === 'light') {
+      document.body.classList.add('light-theme');
+      if (themeIcon) themeIcon.textContent = '🌙';
+      if (themeText) themeText.textContent = 'Dark Mode';
+    }
+
+    // ==========================================
+    // VIDEO AUTOPLAY WITH SYNCED VOICEOVER
+    // ==========================================
+    function toggleVideoMode() {
+      sfx.init();
+      if (isVideoMode && !isPaused) {
+        pauseVideoMode();
+      } else if (isVideoMode && isPaused) {
+        resumeVideoMode();
+      } else {
+        startVideoMode();
+      }
+    }
+
+    function startVideoMode() {
+      sfx.init();
+      isVideoMode = true;
+      isPaused = false;
+      btnVideoMode.classList.add('btn-video-active');
+      videoBtnText.textContent = 'Pause Video Demo';
+      videoPlayIcon.textContent = '⏸';
+
+      playCurrentSlideInVideoMode();
+    }
+
+    function playCurrentSlideInVideoMode() {
+      if (!isVideoMode || isPaused) return;
+
+      clearVideoBuildTimers();
+      const activeSlide = slides[currentSlide];
+      const narration = activeSlide.getAttribute('data-narration') || '';
+      currentSlideDuration = parseInt(activeSlide.getAttribute('data-duration') || '15', 10);
+      slideSecondsLeft = currentSlideDuration;
+      let hasCompletedNarration = false;
+
+      // Schedule progressive PowerPoint build items during slide video run
+      const unrevealed = activeSlide.querySelectorAll('.ppt-item:not(.revealed)');
+      if (unrevealed.length > 0 && isBuildsEnabled) {
+        const stepInterval = (currentSlideDuration * 0.82) / (unrevealed.length + 0.5);
+        unrevealed.forEach((item, idx) => {
+          const delay = Math.max(1000, Math.round((idx + 0.8) * stepInterval * 1000));
+          const timer = setTimeout(() => {
+            if (isVideoMode && !isPaused && slides[currentSlide] === activeSlide) {
+              item.classList.add('revealed', 'just-revealed');
+              setTimeout(() => item.classList.remove('just-revealed'), 650);
+              sfx.playContentEntry();
+              updateBuildCounter();
+            }
+          }, delay);
+          videoBuildTimers.push(timer);
+        });
+      }
+
+      // Start narration speech
+      speakNarration(narration, () => {
+        hasCompletedNarration = true;
+        if (isVideoMode && !isPaused) {
+          progressFill.style.width = '100%';
+          setTimeout(() => {
+            if (isVideoMode && !isPaused) nextSlide();
+          }, 1200);
+        }
+      });
+
+      // Timer ticker for progress bar
+      if (videoTimer) clearInterval(videoTimer);
+      videoTimer = setInterval(() => {
+        if (!isPaused) {
+          totalSecondsElapsed++;
+          if (slideSecondsLeft > 0) slideSecondsLeft--;
+
+          const mins = String(Math.floor(totalSecondsElapsed / 60)).padStart(2, '0');
+          const secs = String(totalSecondsElapsed % 60).padStart(2, '0');
+          timeElapsed.textContent = `${mins}:${secs}`;
+
+          if (!hasCompletedNarration) {
+            const pct = ((currentSlideDuration - slideSecondsLeft) / currentSlideDuration) * 100;
+            progressFill.style.width = `${Math.min(94, pct)}%`;
+          }
+        }
+      }, 1000);
+    }
+
+    function pauseVideoMode() {
+      isPaused = true;
+      videoBtnText.textContent = 'Resume Video Demo';
+      videoPlayIcon.textContent = '▶';
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.pause();
+      }
+      const waves = document.getElementById('audioWaves');
+      if (waves) waves.classList.remove('waves-active');
+    }
+
+    function resumeVideoMode() {
+      isPaused = false;
+      videoBtnText.textContent = 'Pause Video Demo';
+      videoPlayIcon.textContent = '⏸';
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.resume();
+      }
+      const waves = document.getElementById('audioWaves');
+      if (waves && window.speechSynthesis && window.speechSynthesis.speaking) {
+        waves.classList.add('waves-active');
+      }
+    }
+
+    function stopVideoMode() {
+      isVideoMode = false;
+      isPaused = false;
+      btnVideoMode.classList.remove('btn-video-active');
+      videoBtnText.textContent = 'Auto-Play Video Demo';
+      videoPlayIcon.textContent = '▶';
+
+      const waves = document.getElementById('audioWaves');
+      if (waves) waves.classList.remove('waves-active');
+
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+      if (videoTimer) {
+        clearInterval(videoTimer);
+        videoTimer = null;
+      }
+    }
+
+    // Sound Toggle & Audio Test
+    function toggleSound() {
+      isMuted = !isMuted;
+      sfx.muted = isMuted;
+      if (isMuted) {
+        soundIcon.textContent = '🔇';
+        soundText.textContent = 'Sound: OFF';
+        if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+      } else {
+        soundIcon.textContent = '🔊';
+        soundText.textContent = 'Sound: ON';
+        sfx.playChirp();
+      }
+    }
+
+    function testAudio() {
+      sfx.init();
+      sfx.playSuccess();
+      isMuted = false;
+      sfx.muted = false;
+      soundIcon.textContent = '🔊';
+      soundText.textContent = 'Sound: ON';
+      speakNarration("VulnFlow AI 3D presentation system is active and ready. Click Auto-Play Video Demo to begin!");
+    }
+
+    function selectNode(key) {
+      sfx.playChirp();
+      const data = nodeDetails[key];
+      if (!data) return;
+
+      document.querySelectorAll('.node-box').forEach(el => {
+        el.classList.toggle('active-node', el.getAttribute('data-node') === key);
+      });
+
+      document.getElementById('detailBadge').textContent = data.badge;
+      document.getElementById('detailTitle').textContent = data.title;
+      document.getElementById('detailText').textContent = data.text;
+      document.getElementById('detailExtra').innerHTML = `
+        <div>${data.invariant}</div>
+        <div style="color: var(--emerald); font-weight: 700;">STATUS: Active / Enforced</div>
+      `;
+    }
+
+    function toggleNotes() {
+      sfx.playChirp();
+      notesDrawer.classList.toggle('open');
+    }
+
+    // Click anywhere on slide viewport advances PowerPoint build or slide
+    slideViewport.addEventListener('click', (e) => {
+      if (e.target.closest('button') || e.target.closest('a') || e.target.closest('.node-box') || e.target.closest('select')) {
+        return;
+      }
+      advanceStepOrSlide();
+    });
+
+    // Keyboard Shortcuts
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown' || e.key === 'Enter') {
+        e.preventDefault();
+        advanceStepOrSlide();
+      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp' || e.key === 'Backspace') {
+        e.preventDefault();
+        retreatStepOrSlide();
+      } else if (e.key === 'b' || e.key === 'B') {
+        toggleBuilds();
+      } else if (e.key === 's' || e.key === 'S') {
+        toggleNotes();
+      } else if (e.key === 'm' || e.key === 'M') {
+        toggleSound();
+      } else if (e.key === 't' || e.key === 'T') {
+        toggleTheme();
+      } else if (e.key === 'f' || e.key === 'F') {
+        if (!document.fullscreenElement) {
+          document.documentElement.requestFullscreen().catch(() => {});
+        } else {
+          document.exitFullscreen().catch(() => {});
+        }
+      } else if (e.key === 'Home') {
+        goToSlide(0);
+      } else if (e.key === 'End') {
+        goToSlide(totalSlides - 1);
+      }
+    });
+
+    // Event Listeners
+    document.getElementById('btnPrev').addEventListener('click', retreatStepOrSlide);
+    document.getElementById('btnNext').addEventListener('click', advanceStepOrSlide);
+    if (btnBuildToggle) btnBuildToggle.addEventListener('click', toggleBuilds);
+    document.getElementById('btnVideoMode').addEventListener('click', toggleVideoMode);
+    document.getElementById('btnSoundToggle').addEventListener('click', toggleSound);
+    document.getElementById('btnTestAudio').addEventListener('click', testAudio);
+    btnThemeToggle.addEventListener('click', toggleTheme);
+    document.getElementById('btnNotes').addEventListener('click', toggleNotes);
+    document.getElementById('btnPrint').addEventListener('click', () => window.print());
+    document.getElementById('btnFullscreen').addEventListener('click', () => {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      } else {
+        document.exitFullscreen().catch(() => {});
+      }
+    });
+
+    // Initialize
+    updateSlide('forward');
+    selectNode('approval');
+    audioWaves.style.opacity = '0.35';
+  </script>
+</body>
+</html>

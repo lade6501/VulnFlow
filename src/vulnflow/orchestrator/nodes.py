@@ -266,10 +266,21 @@ def approve_node(state: VulnFlowState) -> VulnFlowState:
         approved: list[RemediationPlan] = []
         rejected: list[RemediationPlan] = []
         pending_review: list[RemediationPlan] = []
+        newly_requested: list[RemediationPlan] = []
 
         for p in state.plans:
             tier_val = p.risk_tier.value if hasattr(p.risk_tier, "value") else str(p.risk_tier)
-            if global_approval_gate.is_approved(p.id, repo_path=state.repo_path):
+            approval_status = ""
+            approval_result: dict[str, Any] = {}
+            if (
+                p.requires_approval
+                and p.risk_tier not in (RiskTier.AUTO, RiskTier.BLOCKED)
+                and not getattr(state, "auto_approve", False)
+            ):
+                approval_result = global_approval_gate.resolve_plan(state, p)
+                approval_status = approval_result.get("status", "")
+
+            if approval_status == "approved" or global_approval_gate.is_approved(p.id, repo_path=state.repo_path):
                 approved.append(p)
                 p.requires_approval = False
                 state.append_audit(
@@ -277,7 +288,7 @@ def approve_node(state: VulnFlowState) -> VulnFlowState:
                     "approval_gate",
                     {"plan_id": p.id, "target_package": p.target_package, "risk_tier": tier_val},
                 )
-            elif global_approval_gate.is_rejected(p.id, repo_path=state.repo_path):
+            elif approval_status == "rejected" or global_approval_gate.is_rejected(p.id, repo_path=state.repo_path):
                 rejected.append(p)
                 dec = global_approval_gate.get_decision(p.id, repo_path=state.repo_path)
                 state.append_audit(
@@ -301,7 +312,8 @@ def approve_node(state: VulnFlowState) -> VulnFlowState:
                 )
             else:
                 pending_review.append(p)
-                global_approval_gate.submit_for_approval(p, repo_path=state.repo_path)
+                if not approval_result.get("reused", False):
+                    newly_requested.append(p)
                 state.append_audit(
                     "APPROVAL_REQUESTED",
                     "policy_engine",
@@ -309,17 +321,17 @@ def approve_node(state: VulnFlowState) -> VulnFlowState:
                 )
 
         # Dispatch a single consolidated digest notification for the run instead of spamming individual pings
-        if pending_review or approved:
+        if newly_requested or approved:
             notify_server.send_run_digest(
                 run_id=state.run_id,
                 repo=state.repo_path,
                 approved_plans=[p.to_dict() for p in approved],
-                pending_plans=[p.to_dict() for p in pending_review],
+                pending_plans=[p.to_dict() for p in newly_requested],
             )
             state.append_audit(
                 "DIGEST_NOTIFICATION_SENT",
                 "notify_server",
-                {"approved_count": len(approved), "pending_count": len(pending_review)},
+                {"approved_count": len(approved), "pending_count": len(newly_requested)},
             )
 
         state.approved_plans = approved

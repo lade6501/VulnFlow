@@ -24,12 +24,15 @@ interface PendingPlan {
   reason: string;
   rationale: string;
   diff: string;
+  requiredGroups?: string[];
+  satisfiedGroups?: string[];
 }
 
 export const PlanApproval: React.FC = () => {
   const [plans, setPlans] = useState<PendingPlan[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'danger' } | null>(null);
+  const [selectedGroups, setSelectedGroups] = useState<Record<string, string>>({});
 
   const loadApprovals = () => {
     fetchPendingApprovals().then((livePlans) => {
@@ -46,19 +49,36 @@ export const PlanApproval: React.FC = () => {
     loadApprovals();
   }, []);
 
-  const handleDecision = async (planId: string, approved: boolean) => {
+  const handleDecision = async (plan: PendingPlan, approved: boolean) => {
+    const outstandingGroups = (plan.requiredGroups || ['security']).filter(
+      (group) => !(plan.satisfiedGroups || []).includes(group),
+    );
+    const reviewerGroup = selectedGroups[plan.id] || outstandingGroups[0] || 'security';
     const reason = approved
       ? 'Authorized via VulnFlow Control Plane'
       : 'Rejected by security reviewer';
-    await submitPlanApproval(planId, approved, 'security-lead@corp.internal', reason);
+    const result = await submitPlanApproval(
+      plan.id,
+      approved,
+      import.meta.env?.VITE_REVIEWER_ID || 'security-lead@corp.internal',
+      reason,
+      reviewerGroup,
+      plan.repo,
+    );
 
     setMessage({
-      text: approved
-        ? `Plan ${planId} authorized. Workflow resumed and PR creation initiated.`
-        : `Plan ${planId} rejected. Policy block enforced.`,
-      type: approved ? 'success' : 'danger',
+      text: !result.ok
+        ? `Decision for ${plan.id} could not be recorded.`
+        : result.status === 'pending'
+          ? `${reviewerGroup} approval recorded for ${plan.id}; additional groups are still pending.`
+          : approved
+            ? `Plan ${plan.id} fully authorized. Workflow resumed and PR creation initiated.`
+            : `Plan ${plan.id} rejected. Policy block enforced.`,
+      type: result.ok ? 'success' : 'danger',
     });
-    setPlans(plans.filter((p) => p.id !== planId));
+    if (result.status !== 'pending') {
+      setPlans(plans.filter((p) => p.id !== plan.id));
+    }
     setTimeout(loadApprovals, 1500);
   };
 
@@ -163,15 +183,29 @@ export const PlanApproval: React.FC = () => {
               </div>
 
               <div className="flex items-center gap-2.5 pt-1">
+                {p.requiredGroups && p.requiredGroups.length > 0 && (
+                  <select
+                    aria-label={`Approver group for ${p.id}`}
+                    value={selectedGroups[p.id] || p.requiredGroups.find((group) => !(p.satisfiedGroups || []).includes(group)) || p.requiredGroups[0]}
+                    onChange={(event) => setSelectedGroups({ ...selectedGroups, [p.id]: event.target.value })}
+                    className="px-3 py-2 rounded-lg text-xs font-semibold bg-white text-slate-700 border border-slate-200"
+                  >
+                    {p.requiredGroups.map((group) => (
+                      <option key={group} value={group} disabled={(p.satisfiedGroups || []).includes(group)}>
+                        {group}{(p.satisfiedGroups || []).includes(group) ? ' (approved)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <button
-                  onClick={() => handleDecision(p.id, true)}
+                  onClick={() => handleDecision(p, true)}
                   className="px-3.5 py-2 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs transition-colors cursor-pointer flex items-center gap-1.5"
                 >
                   <IconCheck className="w-3.5 h-3.5" />
                   <span>Authorize &amp; Resume PR</span>
                 </button>
                 <button
-                  onClick={() => handleDecision(p.id, false)}
+                  onClick={() => handleDecision(p, false)}
                   className="px-3.5 py-2 rounded-lg text-xs font-semibold bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 hover:border-rose-300 shadow-2xs transition-colors cursor-pointer flex items-center gap-1.5"
                 >
                   <span>Reject Proposal</span>
