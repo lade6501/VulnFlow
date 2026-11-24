@@ -192,6 +192,7 @@ VulnFlow can be executed directly as `vulnflow` (after running `./run.sh install
 | `--plan-id` | `STRING` | *Required* | Remediation plan ID to authorize or reject (e.g. `PLAN-SEC-FND-e750`). |
 | `--resume` | *Flag* | `False` | Automatically resume workflow execution and create PR upon approval. |
 | `--reviewer` | `STRING` | `security-lead` | Reviewer identifier or email address. |
+| `--reviewer-group` | `STRING` | `security` | Approver group represented by the reviewer, such as `security`, `product-owner`, or `vp`. |
 | `--reason` | `STRING` | `None` | Explanation or justification for approval/rejection decision. |
 | `--reject` | *Flag* | `False` | Reject the remediation plan instead of approving. |
 
@@ -231,7 +232,28 @@ vulnflow serve
 ### Review-Tier Pauses (`Exit Code: 10`)
 When a vulnerability involves an unapproved package (`UNKNOWN`), a major SemVer upgrade, or a deprecated library replacement, VulnFlow safely halts execution:
 - **Safeguard**: PR creation is withheld to prevent merging unvetted dependencies.
-- **State Saved**: Current execution state is persisted to `<repo>/.vulnflow/pending_state.json`.
+- **State Saved**: With Supabase configured, each execution checkpoint and approval is durable across CI workers and action runs. Local `.vulnflow` files remain as a development fallback.
+
+### Durable Supabase approvals
+
+Apply `supabase/migrations/202611240001_vulnflow_approvals.sql` to the Supabase project, then configure the trusted API/CI environment:
+
+```bash
+SUPABASE_URL=https://iozaqfqmyyhqfggiimcm.supabase.co
+SUPABASE_SECRET_KEY=<sb_secret_backend-only-key>
+VULNFLOW_ORG_SLUG=acme
+VULNFLOW_REPOSITORY=acme/payments-api
+VULNFLOW_APPROVER_GROUPS=security,product-owner,vp
+VULNFLOW_SUPABASE_REQUIRED=true
+```
+
+Equivalent plans from later runs reuse the same active approval request. Every group in `VULNFLOW_APPROVER_GROUPS` must reach its quorum before the workflow resumes. Record each decision using the reviewer's actual group:
+
+```bash
+vulnflow approve --plan-id PLAN-ebaaef6720e2 --reviewer vp@example.com --reviewer-group vp --resume
+```
+
+The service-role key bypasses Row Level Security and must never be exposed to the browser or committed to the repository.
 
 ```
 ====================================================================

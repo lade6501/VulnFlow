@@ -3,6 +3,13 @@ src/vulnflow/contracts/__init__.py
 Core Pydantic data schemas and contracts for VulnFlow.
 """
 
+from vulnflow.contracts.approval import (
+    ApprovalDecisionRequest,
+    ApprovalDecisionResponse,
+    ApprovalStatus,
+    PendingApprovalListResponse,
+    PendingApprovalResponse,
+)
 from vulnflow.contracts.finding import (
     Finding,
     FindingType,
@@ -37,13 +44,18 @@ from vulnflow.contracts.state import VulnFlowState
 
 __all__ = [
     "AppliedPatchSummary",
+    "ApprovalDecisionRequest",
+    "ApprovalDecisionResponse",
     "ApprovalGroup",
+    "ApprovalStatus",
     "ApprovedPackagesPolicy",
     "CampaignSummary",
     "Finding",
     "FindingType",
     "LocationInfo",
     "PackagePolicyEntry",
+    "PendingApprovalListResponse",
+    "PendingApprovalResponse",
     "PolicyResult",
     "PolicyRules",
     "PolicyStatus",

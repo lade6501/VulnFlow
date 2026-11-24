@@ -437,6 +437,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
     approve_all = getattr(args, "all", False) or (raw_plan_id and raw_plan_id.lower() in ("all", "*"))
     is_reject = getattr(args, "reject", False)
     reviewer = getattr(args, "reviewer", "security-lead")
+    reviewer_group = getattr(args, "reviewer_group", "security")
     reason = getattr(args, "reason", None)
     repo = getattr(args, "repo", ".")
 
@@ -454,18 +455,27 @@ def cmd_approve(args: argparse.Namespace) -> int:
         return 1
 
     # Record decisions in persistent approval gate (F21)
+    aggregate_results = []
     for pid in target_plan_ids:
-        global_approval_gate.record_decision(
+        aggregate_results.append(global_approval_gate.record_decision(
             plan_id=pid,
             approved=(not is_reject),
             reviewer=reviewer,
+            reviewer_group=reviewer_group,
             reason=reason,
             repo_path=repo,
-        )
+        ))
 
     summary_targets = "ALL pending plans" if approve_all else ", ".join(target_plan_ids)
     if is_reject:
         print(f"\n🛑 Plan(s) {summary_targets} REJECTED by {reviewer}. Reason: {reason or 'No reason provided'}\n")
+        return 0
+
+    if aggregate_results and not all(aggregate_results):
+        print(
+            f"\n⏳ Approval from {reviewer} ({reviewer_group}) was recorded for {summary_targets}; "
+            "additional required approver groups are still pending.\n"
+        )
         return 0
 
     print(f"\n✅ Plan(s) {summary_targets} APPROVED by {reviewer}.")
@@ -836,6 +846,7 @@ def main(argv: list[str] | None = None) -> int:
     p_approve.add_argument("--all", action="store_true", help="Authorize all pending plans in the repository")
     p_approve.add_argument("--reject", action="store_true", help="Reject the remediation plan instead of approving")
     p_approve.add_argument("--reviewer", default="security-lead", help="Reviewer identifier or email")
+    p_approve.add_argument("--reviewer-group", default="security", help="Approver group represented by the reviewer")
     p_approve.add_argument("--reason", help="Explanation or justification for decision")
     p_approve.add_argument("--resume", action="store_true", help="Automatically resume workflow execution on approval")
     p_approve.add_argument("--repo", default=".", help="Repository directory path")
