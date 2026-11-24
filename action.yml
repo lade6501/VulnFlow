@@ -49,6 +49,22 @@ inputs:
     description: 'OpenAI API key'
     required: false
     default: ''
+  supabase-url:
+    description: 'Supabase project URL for persistent approval checkpoints'
+    required: false
+    default: ''
+  supabase-key:
+    description: 'Supabase Secret or Service Role Key'
+    required: false
+    default: ''
+  supabase-required:
+    description: 'Whether Supabase persistence failure halts workflow'
+    required: false
+    default: 'false'
+  org-slug:
+    description: 'Organization slug for Supabase tenancy'
+    required: false
+    default: ''
 
 outputs:
   exit-code:
@@ -80,6 +96,11 @@ runs:
         VULNFLOW_LLM_PROVIDER: ${{ inputs.llm-provider }}
         NVIDIA_API_KEY: ${{ inputs.nvidia-api-key }}
         OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        SUPABASE_URL: ${{ inputs.supabase-url || env.SUPABASE_URL }}
+        SUPABASE_SECRET_KEY: ${{ inputs.supabase-key || env.SUPABASE_SECRET_KEY || env.SUPABASE_KEY }}
+        VULNFLOW_SUPABASE_REQUIRED: ${{ inputs.supabase-required }}
+        VULNFLOW_ORG_SLUG: ${{ inputs.org-slug }}
+        VULNFLOW_REPOSITORY: ${{ github.repository }}
       run: |
         ARGS="--report ${{ inputs.report }} --repo ${{ inputs.repo-path }} --mode ${{ inputs.mode }} --scanner ${{ inputs.scanner }} --output ${{ inputs.output }} --format ${{ inputs.format }}"
         if [ "${{ inputs.auto-approve }}" = "true" ]; then

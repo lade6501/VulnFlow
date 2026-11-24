@@ -1,5 +1,6 @@
 # ci-templates/github-actions.yml
 # GitHub Actions workflow template executing VulnFlow scans and remediation.
+# Supports both direct runner execution and containerized execution with Supabase approval persistence.
 
 name: VulnFlow Remediation Pipeline
 
@@ -20,6 +21,7 @@ on:
 
 jobs:
   vulnflow-remediate:
+    name: VulnFlow Remediation (Python Runner)
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -33,7 +35,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: '3.12'
 
       - name: Run Security Scanner (Trivy)
         uses: aquasecurity/trivy-action@master
@@ -52,6 +54,12 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Supabase Persistence Secrets for Approvals & Checkpoints
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY || secrets.SUPABASE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          VULNFLOW_REPOSITORY: ${{ github.repository }}
+          VULNFLOW_ORG_SLUG: ${{ secrets.VULNFLOW_ORG_SLUG || github.repository_owner }}
+          VULNFLOW_SUPABASE_REQUIRED: 'false'
         run: |
           python3 -m pip install -e .
           python3 -m vulnflow.cli analyze \
@@ -71,3 +79,43 @@ jobs:
             run-report.json
             vulnflow-report.md
             trivy-results.json
+
+  vulnflow-remediate-container:
+    name: VulnFlow Remediation (Docker Container)
+    runs-on: ubuntu-latest
+    if: false  # Change to true if running in containerized mode
+    permissions:
+      contents: write
+      pull-requests: write
+      security-events: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Run Security Scanner (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          format: 'json'
+          output: 'trivy-results.json'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+
+      - name: Run VulnFlow Inside Docker Container
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            -e VULNFLOW_LLM_PROVIDER="${{ secrets.VULNFLOW_LLM_PROVIDER || 'nvidia' }}" \
+            -e NVIDIA_API_KEY="${{ secrets.NVIDIA_API_KEY }}" \
+            -e OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}" \
+            -e ANTHROPIC_API_KEY="${{ secrets.ANTHROPIC_API_KEY }}" \
+            -e OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
+            -e GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" \
+            -e SUPABASE_URL="${{ secrets.SUPABASE_URL }}" \
+            -e SUPABASE_SECRET_KEY="${{ secrets.SUPABASE_SECRET_KEY || secrets.SUPABASE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+            -e VULNFLOW_REPOSITORY="${{ github.repository }}" \
+            -e VULNFLOW_ORG_SLUG="${{ github.repository_owner }}" \
+            -e VULNFLOW_SUPABASE_REQUIRED="false" \
+            ghcr.io/${{ github.repository_owner }}/vulnflow:latest \
+            analyze --report /workspace/trivy-results.json --repo /workspace --mode "${{ inputs.mode || 'pr' }}"

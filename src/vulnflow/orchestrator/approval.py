@@ -245,26 +245,46 @@ global_approval_gate = ApprovalGate()
 def save_run_state(state: VulnFlowState, repo_path: Optional[str] = None) -> Path:
     """Persist run state when execution pauses for human approval."""
     store = SupabaseStore.from_env()
+    supabase_saved = False
     if store:
         try:
             store.save_checkpoint(state)
+            supabase_saved = True
         except Exception as exc:
             log_or_raise(store, "checkpoint save", exc)
 
-    base_dir = Path(repo_path) if repo_path else Path(".")
-    target_dir = base_dir / ".vulnflow"
-    target_dir.mkdir(parents=True, exist_ok=True)
-    state_file = target_dir / f"state_{state.run_id}.json"
-    latest_file = target_dir / "pending_state.json"
+    try:
+        base_dir = Path(repo_path) if repo_path else Path(".")
+        target_dir = base_dir / ".vulnflow"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        state_file = target_dir / f"state_{state.run_id}.json"
+        latest_file = target_dir / "pending_state.json"
 
-    data = state.to_dict()
-    with open(state_file, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-    with open(latest_file, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+        data = state.to_dict()
+        with open(state_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        with open(latest_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
 
-    logger.info("Paused run state saved to %s", state_file)
-    return state_file
+        logger.info("Paused run state saved to %s", state_file)
+        return state_file
+    except Exception as exc:
+        if supabase_saved:
+            logger.warning(
+                "Could not save local checkpoint file to %s (%s), but Supabase persistence succeeded.",
+                repo_path,
+                exc,
+            )
+            fallback_dir = Path("/tmp/.vulnflow")
+            try:
+                fallback_dir.mkdir(parents=True, exist_ok=True)
+                fallback_file = fallback_dir / f"state_{state.run_id}.json"
+                with open(fallback_file, "w", encoding="utf-8") as f:
+                    json.dump(state.to_dict(), f, indent=2)
+                return fallback_file
+            except Exception:
+                return Path(f".vulnflow/state_{state.run_id}.json")
+        raise
 
 
 def load_run_state(repo_path: Optional[str] = None, run_id: Optional[str] = None) -> Optional[VulnFlowState]:
