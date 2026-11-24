@@ -59,9 +59,15 @@ jobs:
             --repo "$GITHUB_WORKSPACE" \
             --mode "${{ inputs.mode || 'pr' }}"
 
-      - name: Upload Scan Artifacts
+      - name: Upload VulnFlow Reports & Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: vulnflow-scan-report
-          path: trivy-results.json
+          name: vulnflow-artifacts
+          path: |
+            vulnflow-report/
+            report.html
+            technical-report.html
+            run-report.json
+            vulnflow-report.md
+            trivy-results.json

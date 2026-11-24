@@ -8,7 +8,6 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
 
 from vulnflow.contracts.policy import (
     ApprovedPackagesPolicy,
@@ -21,7 +20,15 @@ from vulnflow.policy.loaders.yaml_loader import YAMLPolicyLoader
 logger = logging.getLogger("vulnflow.policy.engine")
 
 
-def parse_version_tuple(v_str: str) -> Tuple[int, int, int]:
+def is_prerelease(v_str: str) -> bool:
+    """Return True if version string denotes an alpha, beta, rc, dev, preview, or pre-release."""
+    if not v_str:
+        return False
+    lower = v_str.lower()
+    return bool(re.search(r"[-._]?(alpha|beta|rc|dev|preview|pre|snapshot|b\d+|a\d+)", lower))
+
+
+def parse_version_tuple(v_str: str) -> tuple[int, int, int]:
     """Parse semver string like '4.17.21' or 'v1.2.3-beta' into (major, minor, patch) integer tuple."""
     clean = re.sub(r"^[v^~>=<! ]+", "", v_str).split("-")[0].split("+")[0]
     parts = clean.split(".")
@@ -85,8 +92,8 @@ class PolicyEngine:
 
     def __init__(
         self,
-        policy: Optional[ApprovedPackagesPolicy] = None,
-        policy_path: Optional[Union[str, Path]] = None,
+        policy: ApprovedPackagesPolicy | None = None,
+        policy_path: str | Path | None = None,
     ) -> None:
         if policy is not None:
             self.policy = policy
@@ -95,7 +102,7 @@ class PolicyEngine:
             self.policy = loader.load()
 
         # Index packages by (ecosystem, name)
-        self._pkg_index: Dict[Tuple[str, str], PackagePolicyEntry] = {}
+        self._pkg_index: dict[tuple[str, str], PackagePolicyEntry] = {}
         for entry in self.policy.packages:
             eco = entry.ecosystem.lower()
             if eco in ("pip", "python", "pypi"):
@@ -195,11 +202,11 @@ class PolicyEngine:
     def filter_candidates(
         self,
         package: str,
-        versions: List[str],
+        versions: list[str],
         ecosystem: str = "npm",
-    ) -> List[str]:
+    ) -> list[str]:
         """Filter candidate version strings to only those approved by policy."""
-        allowed: List[str] = []
+        allowed: list[str] = []
         for v in versions:
             res = self.check(package=package, version=v, ecosystem=ecosystem)
             if res.status == PolicyStatus.APPROVED.value:

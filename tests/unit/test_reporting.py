@@ -166,10 +166,10 @@ def test_renderer_golden_hashes() -> None:
     html_hash = hashlib.sha256(generate_html_report(report).encode()).hexdigest()
     assert (
         markdown_hash
-        == "39866944279bee59fa25f2d522a2b08f31908089b6df6540e3cdef417ae6cfec"
+        == "4e5b5f706e01cf529eba5f75530fe7315a7adfcef3126b199ccdbc19009f87cd"
     )
     assert (
-        html_hash == "e147c9189a9ca0e249b13d51b36f616b1b3b0de1db315a3f0b12080cca6aac34"
+        html_hash == "8c3c4a63311ecdf274230df8419ef072fb6d6a07c2c0bae76a028c8bc2ee722a"
     )
 
 
@@ -676,3 +676,42 @@ def test_markdown_html_json_remain_consistent() -> None:
     assert f"| Fixes applied | {summary.fixes_applied} |" in md
     assert f"<strong>{summary.fixes_applied}</strong><span>Applied fixes</span>" in html
     assert json_data["executive_summary"]["fixes_applied"] == summary.fixes_applied
+
+
+def test_executive_and_technical_report_split(tmp_path: Path) -> None:
+    """Verify distinct executive and technical reports, collapsible details, and dual write."""
+    from vulnflow.reporting.html_report import (
+        generate_executive_html_report,
+        generate_technical_html_report,
+        write_html_report,
+    )
+
+    state = report_state()
+    report = build_run_report(state, generated_at=FIXED_TIME)
+
+    exec_html = generate_executive_html_report(report)
+    tech_html = generate_technical_html_report(report)
+
+    # Executive report has executive title, strategic decisions, and banner to technical report
+    assert "Executive Security Intelligence Report" in exec_html
+    assert "Open Technical Remediation Report" in exec_html
+    assert "Top Strategic AI Decisions" in exec_html
+    assert "<details" not in exec_html  # No root-cause collapse lists in executive brief!
+
+    # Technical report has technical title, link back to executive, and collapsible details
+    assert "Technical Remediation & Evidence Report" in tech_html
+    assert "Open Executive Report" in tech_html
+    assert "<details><summary>" in tech_html
+    assert "<details open>" not in tech_html  # Collapsed by default
+
+    # Dual write produces both files
+    out_file = tmp_path / "report.html"
+    res_path = write_html_report(report, out_file)
+    assert res_path == out_file
+    assert out_file.exists()
+    assert (tmp_path / "technical-report.html").exists()
+
+    exec_file_content = out_file.read_text(encoding="utf-8")
+    tech_file_content = (tmp_path / "technical-report.html").read_text(encoding="utf-8")
+    assert "Executive Security Intelligence Report" in exec_file_content
+    assert "Technical Remediation & Evidence Report" in tech_file_content

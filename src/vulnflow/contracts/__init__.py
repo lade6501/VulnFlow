@@ -30,6 +30,8 @@ from vulnflow.contracts.report import (
     CampaignSummary,
     PullRequestSummary,
     RunReport,
+    SecretExposureSummary,
+    StrategicDecision,
 )
 from vulnflow.contracts.state import VulnFlowState
 
@@ -51,7 +53,9 @@ __all__ = [
     "RiskTier",
     "RiskTierThresholds",
     "RunReport",
+    "SecretExposureSummary",
     "SeverityLevel",
+    "StrategicDecision",
     "VerificationResult",
     "VulnFlowState",
     "compute_finding_id",
