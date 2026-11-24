@@ -9,7 +9,7 @@ import hashlib
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from vulnflow.config import settings
 from vulnflow.contracts.finding import Finding
@@ -21,12 +21,15 @@ from vulnflow.contracts.remediation_plan import (
     RiskTier,
 )
 from vulnflow.core.risk import calculate_risk_tier, enforce_stricter_tier
-from vulnflow.core.sanitization import delimit_untrusted_content, detect_prompt_injection
+from vulnflow.core.sanitization import (
+    delimit_untrusted_content,
+    detect_prompt_injection,
+)
 from vulnflow.llm import LLMClient, LLMMessage, create_llm_client
 from vulnflow.mcp_servers.policy_server import policy_candidates, policy_check
 from vulnflow.mcp_servers.registry_server import registry_check
 from vulnflow.observability.audit_log import audit_logger
-from vulnflow.policy.engine import parse_version_tuple
+from vulnflow.policy.engine import is_prerelease, parse_version_tuple
 
 logger = logging.getLogger("vulnflow.agents.planner")
 
@@ -41,8 +44,8 @@ class PlannerOutputSchema:
     rationale: str
 
 
-def _make_plan_id(root_cause_id: str, target_package: Optional[str], target_version: Optional[str], action: Any) -> str:
-    raw = f"{root_cause_id}:{target_package}:{target_version}:{action}".encode("utf-8")
+def _make_plan_id(root_cause_id: str, target_package: str | None, target_version: str | None, action: Any) -> str:
+    raw = f"{root_cause_id}:{target_package}:{target_version}:{action}".encode()
     return f"PLAN-{hashlib.sha256(raw).hexdigest()[:12]}"
 
 
@@ -54,15 +57,13 @@ class PlannerAgent:
 
     def __init__(
         self,
-        client: Optional[LLMClient] = None,
-        enable_llm: Optional[bool] = None,
-        enrichment_mode: Optional[str] = None,
-        max_llm_calls_per_run: Optional[int] = None,
+        client: LLMClient | None = None,
+        enable_llm: bool | None = None,
+        enrichment_mode: str | None = None,
+        max_llm_calls_per_run: int | None = None,
     ) -> None:
         if enable_llm is None:
-            if os.getenv("VULNFLOW_ENABLE_LLM", "").lower() in ("0", "false", "no"):
-                enable_llm = False
-            elif os.getenv("CI") and not os.getenv("NVIDIA_API_KEY") and not os.getenv("OPENAI_API_KEY"):
+            if os.getenv("VULNFLOW_ENABLE_LLM", "").lower() in ("0", "false", "no") or os.getenv("CI") and not os.getenv("NVIDIA_API_KEY") and not os.getenv("OPENAI_API_KEY"):
                 enable_llm = False
             else:
                 enable_llm = True
@@ -85,7 +86,7 @@ class PlannerAgent:
         """Reset provider failure and enrichment accounting for a new run."""
         self._circuit_broken = False
         self._llm_calls_this_run = 0
-        self._enrichment_stats: Dict[str, Any] = {
+        self._enrichment_stats: dict[str, Any] = {
             "dependency_groups": 0,
             "eligible_groups": 0,
             "model_calls": 0,
@@ -93,17 +94,17 @@ class PlannerAgent:
             "failed_calls": 0,
             "skip_reasons": {},
         }
-        self._last_enrichment: Dict[str, Any] = {
+        self._last_enrichment: dict[str, Any] = {
             "state": "not_run",
             "reason": "not_evaluated",
         }
 
     @property
-    def last_enrichment(self) -> Dict[str, Any]:
+    def last_enrichment(self) -> dict[str, Any]:
         """Return safe audit metadata for the most recently formulated plan."""
         return dict(self._last_enrichment)
 
-    def enrichment_stats(self) -> Dict[str, Any]:
+    def enrichment_stats(self) -> dict[str, Any]:
         """Return run-scoped planner model-call accounting."""
         stats = dict(self._enrichment_stats)
         stats["skip_reasons"] = dict(self._enrichment_stats["skip_reasons"])
@@ -121,10 +122,10 @@ class PlannerAgent:
         *,
         current_version: str,
         target_version: str,
-        available_versions: List[str],
+        available_versions: list[str],
         is_transitive: bool,
-    ) -> List[str]:
-        reasons: List[str] = []
+    ) -> list[str]:
+        reasons: list[str] = []
         if parse_version_tuple(target_version)[0] > parse_version_tuple(current_version)[0]:
             reasons.append("major_version_upgrade")
         if len(available_versions) > 1:
@@ -133,7 +134,7 @@ class PlannerAgent:
             reasons.append("transitive_dependency")
         return reasons
 
-    def _should_enrich(self, reasons: List[str], citations: List[str]) -> tuple[bool, str]:
+    def _should_enrich(self, reasons: list[str], citations: list[str]) -> tuple[bool, str]:
         if not self.enable_llm or not self.client:
             return False, "llm_disabled"
         if self.enrichment_mode == "off":
@@ -152,8 +153,8 @@ class PlannerAgent:
     def plan_remediation(
         self,
         root_cause_id: str,
-        findings: List[Finding],
-        advisories: Optional[List[Dict[str, Any]]] = None,
+        findings: list[Finding],
+        advisories: list[dict[str, Any]] | None = None,
         ecosystem: str = "npm",
         is_transitive: bool = False,
     ) -> RemediationPlan:
@@ -170,9 +171,9 @@ class PlannerAgent:
         pol_result = PolicyResult.from_dict(pol_raw)
 
         # Gather all candidate fix versions from scanner findings
-        all_fix_versions: List[str] = []
-        finding_ids: List[str] = []
-        cve_list: List[str] = []
+        all_fix_versions: list[str] = []
+        finding_ids: list[str] = []
+        cve_list: list[str] = []
 
         for f in findings:
             finding_ids.append(f.id)
@@ -183,8 +184,13 @@ class PlannerAgent:
                     if clean_v and clean_v not in all_fix_versions:
                         all_fix_versions.append(clean_v)
 
-        # Sort candidate versions by semver (highest first)
-        all_fix_versions = sorted(all_fix_versions, key=parse_version_tuple, reverse=True)
+        # Sort candidate versions: prioritize stable releases over pre-releases (alphas, betas, RCs)
+        stable_candidates = [v for v in all_fix_versions if not is_prerelease(v)]
+        prerelease_candidates = [v for v in all_fix_versions if is_prerelease(v)]
+        all_fix_versions = (
+            sorted(stable_candidates, key=parse_version_tuple, reverse=True)
+            + sorted(prerelease_candidates, key=parse_version_tuple, reverse=True)
+        )
 
         # 2. Filter candidate versions strictly through policy engine
         approved_candidates = policy_candidates(full_package, all_fix_versions, ecosystem)
@@ -227,15 +233,25 @@ class PlannerAgent:
             )
 
         # Determine target version with registry availability check (F14):
-        # 1. Prefer approved candidate if available in registry
-        # 2. Otherwise propose the highest stable upstream fix version available in registry
+        # 1. Prefer approved stable candidate if available in registry
+        # 2. Prefer unapproved stable candidate over pre-release versions
+        # 3. Only propose pre-release if no stable fix exists
         available_approved = [v for v in approved_candidates if registry_check(full_package, v, ecosystem).get("available", True)]
         available_all = [v for v in all_fix_versions if registry_check(full_package, v, ecosystem).get("available", True)]
 
         requires_approval = False
-        if available_approved:
+        approved_stable = [v for v in available_approved if not is_prerelease(v)]
+        all_stable = [v for v in available_all if not is_prerelease(v)]
+
+        if approved_stable:
+            target_version = approved_stable[0]
+            pol_result = PolicyResult.from_dict(policy_check(full_package, target_version, ecosystem))
+        elif available_approved:
             target_version = available_approved[0]
             pol_result = PolicyResult.from_dict(policy_check(full_package, target_version, ecosystem))
+        elif all_stable:
+            target_version = all_stable[0]
+            requires_approval = True
         elif available_all:
             target_version = available_all[0]
             requires_approval = True
@@ -283,9 +299,9 @@ class PlannerAgent:
         citation_str = f" Cited advisories: {', '.join(f'[{cid}]' for cid in chunk_citations)}." if chunk_citations else ""
 
         # Scan external advisory text for hostile prompt injection (F34)
-        advisories_raw: List[str] = []
+        advisories_raw: list[str] = []
         injection_detected = False
-        detected_patterns: List[str] = []
+        detected_patterns: list[str] = []
         for a in (advisories or [])[:3]:
             cid = a.get("chunk_id", "ADV")
             title = a.get("title", "")
@@ -427,7 +443,7 @@ class PlannerAgent:
                         "model": model_name,
                     }
                     self._enrichment_stats["failed_calls"] += 1
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 self._last_enrichment = {
                     "state": "failed",
                     "reason": "provider_error",

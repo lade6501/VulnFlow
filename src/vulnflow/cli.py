@@ -104,6 +104,13 @@ def _write_run_reports(result: VulnFlowState, args: argparse.Namespace) -> list[
         html_target = md_target.parent / "report.html"
         targets.append(("html", html_target))
 
+    # Ensure canonical json evidence is always persisted alongside reports
+    has_json = any(fmt == "json" for fmt, _ in targets)
+    if not has_json and targets:
+        ref_path = targets[0][1]
+        json_target = ref_path.parent / "run-report.json"
+        targets.append(("json", json_target))
+
     written: list[Path] = []
     seen: set[Path] = set()
     for report_format, path in targets:

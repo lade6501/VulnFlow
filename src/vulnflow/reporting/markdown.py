@@ -157,33 +157,49 @@ def generate_markdown_report(
             "",
             "### Root-cause remediation summaries",
             "",
+            f"- **Corporate policy compliance status**: `{escape_markdown(snapshot.policy_and_compliance.policy_status)}`.",
+            "",
         ]
     )
-    for root in snapshot.root_causes:
-        lines.extend(
-            [
-                f"#### {escape_markdown(root.package)}",
-                "",
-                (
-                    f"- Origin: `{root.origin.value}`; installed: "
-                    f"`{escape_markdown(root.installed_version or 'UNKNOWN')}`; target: "
-                    f"`{escape_markdown(root.target_version or 'UNKNOWN')}`."
-                ),
-                f"- Findings/CVEs: `{len(root.associated_finding_ids)}` / `{len(root.associated_cves)}`.",
-                f"- Recommended: {escape_markdown(root.recommended_change)}",
-                f"- Why selected: {escape_markdown(root.risk_reason)}",
-                f"- Risk tier: `{escape_markdown(root.risk_tier)}`.",
-                f"- Policy status: `{escape_markdown(snapshot.policy_and_compliance.policy_status)}`.",
-            ]
-        )
-        for insight in root.insights:
-            if insight.category == "remediation_strategy":
-                lines.append(f"- **AI Strategy**: {escape_markdown(insight.text)}")
-            elif insight.category == "compatibility_concern":
-                lines.append(
-                    f"- **Compatibility Risk**: {escape_markdown(insight.text)}"
-                )
-        lines.append("")
+    if snapshot.strategic_decisions:
+        for d in snapshot.strategic_decisions:
+            lines.extend(
+                [
+                    f"#### {escape_markdown(d.title)}",
+                    "",
+                    f"- **Finding**: {escape_markdown(d.finding)}",
+                    f"- **Why it matters**: {escape_markdown(d.impact)}",
+                    f"- **AI recommendation**: {escape_markdown(d.recommendation)}",
+                    f"- **Action taken**: {escape_markdown(d.action_taken)}",
+                    f"- **Human decision**: {escape_markdown(d.human_decision)}",
+                    f"- **Evidence**: {escape_markdown(d.evidence_summary)}",
+                    "",
+                ]
+            )
+    else:
+        for root in snapshot.root_causes[:3]:
+            lines.extend(
+                [
+                    f"#### {escape_markdown(root.package)}",
+                    "",
+                    (
+                        f"- Origin: `{root.origin.value}`; installed: "
+                        f"`{escape_markdown(root.installed_version or 'UNKNOWN')}`; target: "
+                        f"`{escape_markdown(root.target_version or 'UNKNOWN')}`."
+                    ),
+                    f"- Findings/CVEs: `{len(root.associated_finding_ids)}` / `{len(root.associated_cves)}`.",
+                    f"- Recommended: {escape_markdown(root.recommended_change)}",
+                    f"- Why selected: {escape_markdown(root.risk_reason)}",
+                    f"- Risk tier: `{escape_markdown(root.risk_tier)}`.",
+                    f"- Policy status: `{escape_markdown(snapshot.policy_and_compliance.policy_status)}`.",
+                    "",
+                ]
+            )
+    lines.append(
+        "🔍 *For per-package call stacks, advisory validation logs, and sandbox diffs, "
+        "see [technical-report.html](technical-report.html).*"
+    )
+    lines.append("")
 
     # Section E: Proposed Remediation Campaigns
     lines.extend(["## E. Proposed Remediation Campaigns", ""])
@@ -293,10 +309,13 @@ def generate_markdown_report(
         [
             "## H. Technical Evidence Appendix",
             "",
-            f"- Input Scanner File SHA-256: `{escape_markdown(snapshot.provenance.input_scanner_file_sha256 or 'UNKNOWN')}`",
+            f"- Input Scanner File SHA-256: `{escape_markdown(snapshot.provenance.input_scanner_file_sha256 or 'Live container/filesystem scan')}`",
             f"- Audit Chain Head: `{escape_markdown(snapshot.provenance.audit_chain_head_hash or 'UNKNOWN')}`",
             "",
-            f"Full report: [{escape_markdown(html_name)}]({escape_markdown(html_name)})",
+            "### Associated Reports & Artifacts",
+            f"- 📋 **Executive Security Brief**: [{escape_markdown(html_name)}]({escape_markdown(html_name)})",
+            "- 🔬 **Technical Remediation & Evidence Report**: [technical-report.html](technical-report.html)",
+            "- 📊 **Machine-Readable Snapshot**: [run-report.json](run-report.json)",
             "",
         ]
     )

@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from vulnflow.contracts.finding import Finding
+from vulnflow.contracts.finding import Finding, FindingType
 from vulnflow.knowledge.graph.build_from_tree import DependencyGraph
 from vulnflow.knowledge.graph.queries import find_root_cause
-from vulnflow.llm import LLMClient, LLMMessage, create_llm_client
+from vulnflow.llm import LLMClient
 
 logger = logging.getLogger("vulnflow.agents.rootcause")
 
@@ -24,10 +24,10 @@ class RootCauseResult:
     root_cause_id: str
     root_cause_package: str
     is_direct: bool
-    dependency_chain: List[str]
+    dependency_chain: list[str]
     explanation: str
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -37,19 +37,32 @@ class RootCauseAgent:
     the responsible direct manifest dependency.
     """
 
-    def __init__(self, client: Optional[LLMClient] = None) -> None:
+    def __init__(self, client: LLMClient | None = None) -> None:
         self.client = client
 
     def analyze_finding(
         self,
         finding: Finding,
-        graph: Optional[DependencyGraph] = None,
-        repo_path: Optional[str] = None,
+        graph: DependencyGraph | None = None,
+        repo_path: str | None = None,
         ecosystem: str = "npm",
     ) -> RootCauseResult:
         """
         Identify the root cause parent dependency and generate an engineering explanation.
         """
+        if getattr(finding, "type", None) == FindingType.SECRET or str(getattr(finding, "type", "")).lower() == "secret":
+            file_path = finding.location.file_path if finding.location else "unknown file"
+            meta = getattr(finding, "metadata", {}) or {}
+            rule_id = meta.get("rule_id") or finding.id
+            desc = meta.get("description") or getattr(finding, "raw_ref", "") or "Hardcoded secret or credential"
+            return RootCauseResult(
+                root_cause_id=f"SECRET-{rule_id}",
+                root_cause_package="secret:credentials",
+                is_direct=True,
+                dependency_chain=[f"secret:{file_path}"],
+                explanation=f"Hardcoded credential exposure detected in {file_path} ({desc}).",
+            )
+
         dep_path = finding.location.dependency_path if finding.location else []
         res = find_root_cause(
             package=finding.package,
@@ -85,16 +98,16 @@ class RootCauseAgent:
 
     def group_findings(
         self,
-        findings: List[Finding],
-        graph: Optional[DependencyGraph] = None,
-        repo_path: Optional[str] = None,
+        findings: list[Finding],
+        graph: DependencyGraph | None = None,
+        repo_path: str | None = None,
         ecosystem: str = "npm",
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Group multiple findings by their common root cause parent dependency.
         Collapses deep transitive findings under the single direct parent that brought them in.
         """
-        groups: Dict[str, Dict[str, Any]] = {}
+        groups: dict[str, dict[str, Any]] = {}
 
         for f in findings:
             analysis = self.analyze_finding(f, graph=graph, repo_path=repo_path, ecosystem=ecosystem)

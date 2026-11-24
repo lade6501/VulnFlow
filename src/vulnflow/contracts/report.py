@@ -302,6 +302,33 @@ class CampaignSummary(ReportModel):
     status: str = "prepared"
 
 
+class StrategicDecision(ReportModel):
+    """Evidence-backed strategic AI conclusion for leadership and executive summaries."""
+
+    category: str
+    title: str
+    finding: str
+    impact: str
+    recommendation: str
+    action_taken: str
+    human_decision: str
+    evidence_summary: str
+    packages_affected: tuple[str, ...] = ()
+    count: int = 0
+
+
+class SecretExposureSummary(ReportModel):
+    """Structured record for secret and credential exposures."""
+
+    secret_type: str
+    file_path: str
+    line_number: int | None = None
+    finding_id: str
+    plan_id: str | None = None
+    action_required: str = "Rotate credentials and remove hardcoded secrets"
+    status: str = "pending_approval"
+
+
 class ApprovalGroup(ReportModel):
     group_type: str  # "secrets", "breaking_dependency_updates", "unapproved_dependencies", "standard_bumps"
     title: str
@@ -333,3 +360,5 @@ class RunReport(ReportModel):
     applied_patches: tuple[AppliedPatchSummary, ...] = ()
     remediation_campaigns: tuple[CampaignSummary, ...] = ()
     approval_groups: tuple[ApprovalGroup, ...] = ()
+    strategic_decisions: tuple[StrategicDecision, ...] = ()
+    secrets_exposure: tuple[SecretExposureSummary, ...] = ()
