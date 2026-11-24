@@ -15,6 +15,12 @@ services:
     environment:
       - VULNFLOW_ENV=production
       - LOG_LEVEL=INFO
+      - SUPABASE_URL
+      - SUPABASE_SECRET_KEY
+      - SUPABASE_KEY
+      - VULNFLOW_REPOSITORY
+      - VULNFLOW_ORG_SLUG
+      - VULNFLOW_SUPABASE_REQUIRED
     volumes:
       - vulnflow-data:/app/.vulnflow
       - ./:/workspace:ro
