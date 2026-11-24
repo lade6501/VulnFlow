@@ -170,10 +170,20 @@ def _planner_llm_provenance(
 ) -> tuple[str | None, str | None, TokenUsage, float | None]:
     """Aggregate persisted planner enrichment metadata without reading model content."""
     enrichments: list[dict[str, Any]] = []
+    seen_call_ids: set[str] = set()
     for payload in _event_payloads(state, "PLAN_FORMULATED"):
         enrichment = payload.get("llm_enrichment")
-        if isinstance(enrichment, dict) and enrichment.get("state") == "executed":
-            enrichments.append(enrichment)
+        if not isinstance(enrichment, dict) or enrichment.get("state") not in {
+            "executed",
+            "cached",
+        }:
+            continue
+        call_id = enrichment.get("call_id")
+        if isinstance(call_id, str):
+            if call_id in seen_call_ids:
+                continue
+            seen_call_ids.add(call_id)
+        enrichments.append(enrichment)
     if not enrichments:
         return None, None, TokenUsage(), None
 
@@ -1184,7 +1194,10 @@ def _build_approval_groups(state: VulnFlowState) -> tuple[ApprovalGroup, ...]:
     findings_by_id = {f.id: f for f in (state.deduped_findings or state.findings)}
 
     for p in pending:
-        if "secret" in str(p.root_cause_id).lower() or "secret" in str(p.target_package).lower():
+        if (
+            "secret" in str(p.root_cause_id).lower()
+            or "secret" in str(p.target_package).lower()
+        ):
             continue
         cur_v = "0.0.0"
         for fid in p.finding_ids:
@@ -1265,7 +1278,8 @@ def _build_secrets_exposure(state: VulnFlowState) -> tuple[SecretExposureSummary
         (
             p
             for p in state.plans
-            if "secret" in p.root_cause_id.lower() or "secret" in p.target_package.lower()
+            if "secret" in p.root_cause_id.lower()
+            or "secret" in (p.target_package or "").lower()
         ),
         None,
     )
@@ -1280,7 +1294,9 @@ def _build_secrets_exposure(state: VulnFlowState) -> tuple[SecretExposureSummary
             or ""
         )
         f_type = getattr(f, "type", None)
-        f_type_str = f_type.value if hasattr(f_type, "value") else str(f_type or "")
+        f_type_str = (
+            str(f_type.value) if isinstance(f_type, FindingType) else str(f_type or "")
+        )
         is_secret = (
             f_type == FindingType.SECRET
             or f_type_str.lower() == "secret"
@@ -1309,8 +1325,14 @@ def _build_secrets_exposure(state: VulnFlowState) -> tuple[SecretExposureSummary
         )
         line_no = (
             getattr(loc, "line", None)
-            or (getattr(loc, "line_start", None) if hasattr(loc, "line_start") else None)
-            or (loc.get("line") or loc.get("line_start") if isinstance(loc, dict) else None)
+            or (
+                getattr(loc, "line_start", None) if hasattr(loc, "line_start") else None
+            )
+            or (
+                loc.get("line") or loc.get("line_start")
+                if isinstance(loc, dict)
+                else None
+            )
         )
         key = (rule_or_desc, file_path, line_no)
         if key in seen:
@@ -1348,15 +1370,18 @@ def _build_strategic_decisions(
 
     # 1. Automated Low-Risk Remediation
     if fixes > 0 or pr_summaries:
-        remediated_pkgs = tuple(
-            dict.fromkeys(
-                pkg
-                for pr in pr_summaries
-                for pkg in pr.affected_packages
+        remediated_pkgs = (
+            tuple(
+                dict.fromkeys(
+                    pkg for pr in pr_summaries for pkg in pr.affected_packages
+                )
             )
-        ) or tuple(
-            r.package for r in roots if r.bump_class in ("minor", "patch") and r.target_version
-        )[:3]
+            or tuple(
+                r.package
+                for r in roots
+                if r.bump_class in ("minor", "patch") and r.target_version
+            )[:3]
+        )
         pr_link_text = (
             f"Pull Request #{pr_summaries[0].pr_number}"
             if pr_summaries and pr_summaries[0].pr_number
@@ -1426,7 +1451,9 @@ def _build_strategic_decisions(
     )
     if secrets_exposure or sec_pkgs:
         sec_count = len(secrets_exposure) or len(sec_pkgs)
-        sec_files = tuple(dict.fromkeys(s.file_path for s in secrets_exposure)) or ("repository source files",)
+        sec_files = tuple(dict.fromkeys(s.file_path for s in secrets_exposure)) or (
+            "repository source files",
+        )
         pkg_desc = f" ({', '.join(sec_pkgs)})" if sec_pkgs else ""
         decisions.append(
             StrategicDecision(
@@ -1438,7 +1465,8 @@ def _build_strategic_decisions(
                 action_taken="Consolidated all credential findings into a dedicated secrets remediation campaign and halted automatic code pushing.",
                 human_decision="Security reviewer must verify credential revocation in cloud provider consoles before authorizing secret rotation plan.",
                 evidence_summary=f"Secret detection scanner matches across {len(sec_files)} file(s).",
-                packages_affected=sec_pkgs or tuple(dict.fromkeys(s.secret_type for s in secrets_exposure)),
+                packages_affected=sec_pkgs
+                or tuple(dict.fromkeys(s.secret_type for s in secrets_exposure)),
                 count=sec_count,
             )
         )

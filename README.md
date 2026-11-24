@@ -236,7 +236,7 @@ When a vulnerability involves an unapproved package (`UNKNOWN`), a major SemVer 
 
 ### Durable Supabase approvals
 
-Apply `supabase/migrations/202611240001_vulnflow_approvals.sql` to the Supabase project, then configure the trusted API/CI environment:
+Apply the SQL files in `supabase/migrations/` to the Supabase project in filename order, then configure the trusted API/CI environment:
 
 ```bash
 SUPABASE_URL=https://iozaqfqmyyhqfggiimcm.supabase.co
@@ -245,6 +245,10 @@ VULNFLOW_ORG_SLUG=acme
 VULNFLOW_REPOSITORY=acme/payments-api
 VULNFLOW_APPROVER_GROUPS=security,product-owner,vp
 VULNFLOW_SUPABASE_REQUIRED=true
+VULNFLOW_PLANNER_LLM_ENRICHMENT=selective
+VULNFLOW_BATCH_ENRICHMENT_MAX_PLANS=20
+VULNFLOW_POLICY_VERSION=default
+VULNFLOW_ORGANIZATION_GRAPH_ENABLED=false
 ```
 
 Equivalent plans from later runs reuse the same active approval request. Every group in `VULNFLOW_APPROVER_GROUPS` must reach its quorum before the workflow resumes. Record each decision using the reviewer's actual group:
@@ -254,6 +258,10 @@ vulnflow approve --plan-id PLAN-ebaaef6720e2 --reviewer vp@example.com --reviewe
 ```
 
 The service-role key bypasses Row Level Security and must never be exposed to the browser or committed to the repository.
+
+Planner enrichment is graph-first and run-batched: deterministic plans are created first, auto-tier plans use no model call, and review-tier plans are enriched together. There is no run-level call-count ceiling; large runs create one model call per configured batch, never one call per dependency. Equivalent plan/graph/evidence contexts reuse `vulnflow_enrichment_cache` instead of calling the model again.
+
+Organization-wide graph context is opt-in because the bundled active graph is sample data. Set `VULNFLOW_ORGANIZATION_GRAPH_ENABLED=true` only after loading real service and repository relationships; repository-local dependency graph context is always used.
 
 ```
 ====================================================================

@@ -56,7 +56,11 @@ class SupabaseConfig:
             or os.getenv("CI_PROJECT_PATH", "").strip()
             or None
         )
-        inferred_org = repository_key.split("/", 1)[0] if repository_key and "/" in repository_key else "default"
+        inferred_org = (
+            repository_key.split("/", 1)[0]
+            if repository_key and "/" in repository_key
+            else "default"
+        )
         org = os.getenv("VULNFLOW_ORG_SLUG", inferred_org).strip() or inferred_org
         required = os.getenv("VULNFLOW_SUPABASE_REQUIRED", "false").strip().lower() in {
             "1",
@@ -102,7 +106,9 @@ def _stable_issue_references(plan: RemediationPlan) -> list[str]:
     return sorted(references)
 
 
-def repository_identity(repo_path: str | None, configured_key: str | None = None) -> str:
+def repository_identity(
+    repo_path: str | None, configured_key: str | None = None
+) -> str:
     """Return a stable repository identity, preferring CI/provider metadata."""
     if configured_key:
         return configured_key.strip().lower()
@@ -113,11 +119,18 @@ def repository_identity(repo_path: str | None, configured_key: str | None = None
         return str(candidate).lower()
 
 
-def explicit_repository_identity(repo_path: str | None, configured_key: str | None = None) -> str:
+def explicit_repository_identity(
+    repo_path: str | None, configured_key: str | None = None
+) -> str:
     """Accept a dashboard-supplied repository key while preserving CI path mapping."""
     raw = (repo_path or "").strip()
     candidate = Path(raw).expanduser() if raw else None
-    if raw not in ("", ".", "workspace") and candidate is not None and not candidate.exists() and not candidate.is_absolute():
+    if (
+        raw not in ("", ".", "workspace")
+        and candidate is not None
+        and not candidate.exists()
+        and not candidate.is_absolute()
+    ):
         return raw.lower()
     return repository_identity(repo_path, configured_key)
 
@@ -135,7 +148,8 @@ def approval_identity(
         "schema": 1,
         "ecosystem": (ecosystem or "unknown").lower(),
         "environment": environment or os.getenv("VULNFLOW_ENVIRONMENT", "default"),
-        "policy_version": policy_version or os.getenv("VULNFLOW_POLICY_VERSION", "default"),
+        "policy_version": policy_version
+        or os.getenv("VULNFLOW_POLICY_VERSION", "default"),
         # Finding IDs currently include the checkout path. They identify an
         # occurrence, not a cross-run remediation intent, so they are excluded.
         "issue_references": _stable_issue_references(plan),
@@ -180,7 +194,11 @@ class SupabaseStore:
         url = f"{self.config.url}/rest/v1/{path.lstrip('/')}"
         if query:
             url = f"{url}?{urlencode(query)}"
-        body = json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8") if payload is not None else None
+        body = (
+            json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8")
+            if payload is not None
+            else None
+        )
         headers = {
             "apikey": self.config.key,
             "Content-Type": "application/json",
@@ -198,7 +216,9 @@ class SupabaseStore:
                 raw = response.read()
         except HTTPError as exc:
             details = exc.read().decode("utf-8", errors="replace")[:1000]
-            raise SupabaseStoreError(f"Supabase returned HTTP {exc.code}: {details}") from exc
+            raise SupabaseStoreError(
+                f"Supabase returned HTTP {exc.code}: {details}"
+            ) from exc
         except (URLError, TimeoutError, OSError) as exc:
             raise SupabaseStoreError(f"Could not reach Supabase: {exc}") from exc
         if not raw:
@@ -209,14 +229,18 @@ class SupabaseStore:
             raise SupabaseStoreError("Supabase returned a non-JSON response") from exc
 
     def _rpc(self, function_name: str, payload: dict[str, Any]) -> Any:
-        return self._request("POST", f"rpc/{quote(function_name, safe='')}", payload=payload)
+        return self._request(
+            "POST", f"rpc/{quote(function_name, safe='')}", payload=payload
+        )
 
     def _repo_key(self, repo_path: str | None, *, allow_explicit: bool = False) -> str:
         if allow_explicit:
             return explicit_repository_identity(repo_path, self.config.repository_key)
         return repository_identity(repo_path, self.config.repository_key)
 
-    def claim_approval(self, state: VulnFlowState, plan: RemediationPlan) -> dict[str, Any]:
+    def claim_approval(
+        self, state: VulnFlowState, plan: RemediationPlan
+    ) -> dict[str, Any]:
         """Create or reuse the durable approval request for a plan occurrence."""
         approval_key = approval_identity(plan, ecosystem=state.ecosystem)
         result = self._rpc(
@@ -234,7 +258,9 @@ class SupabaseStore:
             },
         )
         if not isinstance(result, dict):
-            raise SupabaseStoreError("vulnflow_claim_approval returned an invalid payload")
+            raise SupabaseStoreError(
+                "vulnflow_claim_approval returned an invalid payload"
+            )
         return result
 
     def get_plan_approval(self, plan_id: str, repo_path: str | None) -> dict[str, Any]:
@@ -273,7 +299,9 @@ class SupabaseStore:
             },
         )
         if not isinstance(result, dict):
-            raise SupabaseStoreError("vulnflow_record_approval_decision returned an invalid payload")
+            raise SupabaseStoreError(
+                "vulnflow_record_approval_decision returned an invalid payload"
+            )
         return result
 
     def list_pending(self, repo_path: str | None = None) -> list[dict[str, Any]]:
@@ -283,9 +311,15 @@ class SupabaseStore:
             "order": "created_at.desc",
         }
         if repo_path:
-            query["repository_key"] = f"eq.{self._repo_key(repo_path, allow_explicit=True)}"
+            query["repository_key"] = (
+                f"eq.{self._repo_key(repo_path, allow_explicit=True)}"
+            )
         result = self._request("GET", "vulnflow_pending_approvals", query=query)
-        return [item for item in result if isinstance(item, dict)] if isinstance(result, list) else []
+        return (
+            [item for item in result if isinstance(item, dict)]
+            if isinstance(result, list)
+            else []
+        )
 
     def save_checkpoint(self, state: VulnFlowState) -> None:
         """Upsert the latest serialized checkpoint for one workflow run."""
@@ -301,7 +335,9 @@ class SupabaseStore:
             },
         )
 
-    def load_checkpoint(self, repo_path: str | None, run_id: str | None = None) -> dict[str, Any] | None:
+    def load_checkpoint(
+        self, repo_path: str | None, run_id: str | None = None
+    ) -> dict[str, Any] | None:
         """Load a specific or the latest resumable checkpoint for a repository."""
         result = self._rpc(
             "vulnflow_load_checkpoint",
@@ -316,6 +352,47 @@ class SupabaseStore:
             return state if isinstance(state, dict) else None
         return None
 
+    def get_enrichment_cache(
+        self, repo_path: str | None, cache_keys: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Load several plan-enrichment entries in one database call."""
+        if not cache_keys:
+            return {}
+        result = self._rpc(
+            "vulnflow_get_enrichment_cache",
+            {
+                "p_organization_slug": self.config.organization_slug,
+                "p_repository_key": self._repo_key(repo_path),
+                "p_cache_keys": list(dict.fromkeys(cache_keys)),
+            },
+        )
+        if not isinstance(result, list):
+            return {}
+        return {
+            str(item["cache_key"]): item
+            for item in result
+            if isinstance(item, dict)
+            and item.get("cache_key")
+            and isinstance(item.get("enrichment"), dict)
+        }
+
+    def save_enrichment_cache(
+        self,
+        repo_path: str | None,
+        entries: list[dict[str, Any]],
+    ) -> None:
+        """Upsert structured enrichment records for reuse by future runs."""
+        if not entries:
+            return
+        self._rpc(
+            "vulnflow_save_enrichment_cache",
+            {
+                "p_organization_slug": self.config.organization_slug,
+                "p_repository_key": self._repo_key(repo_path),
+                "p_entries": entries,
+            },
+        )
+
 
 def should_raise(store: SupabaseStore) -> bool:
     """Whether a remote persistence failure must stop the workflow."""
@@ -325,7 +402,9 @@ def should_raise(store: SupabaseStore) -> bool:
 def log_or_raise(store: SupabaseStore, operation: str, exc: Exception) -> None:
     """Apply the configured strict/fallback behavior consistently."""
     if should_raise(store):
-        raise SupabaseStoreError(f"Required Supabase operation '{operation}' failed: {exc}") from exc
-    logger.warning("Supabase %s failed; using local persistence fallback: %s", operation, exc)
-
-
+        raise SupabaseStoreError(
+            f"Required Supabase operation '{operation}' failed: {exc}"
+        ) from exc
+    logger.warning(
+        "Supabase %s failed; using local persistence fallback: %s", operation, exc
+    )
