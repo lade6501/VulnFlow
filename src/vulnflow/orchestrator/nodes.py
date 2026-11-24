@@ -5,7 +5,9 @@ Implements individual state transformation node handlers in LangGraph.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -31,9 +33,10 @@ from vulnflow.contracts.remediation_plan import (
 )
 from vulnflow.contracts.state import VulnFlowState
 from vulnflow.core.dedupe import DeduplicationEngine
+from vulnflow.knowledge.graph.queries import find_blast_radius
 from vulnflow.mcp_servers.build_server import build_server
 from vulnflow.mcp_servers.git_server import git_server
-from vulnflow.mcp_servers.knowledge_server import advisory_search
+from vulnflow.mcp_servers.knowledge_server import advisory_search, knowledge_server
 from vulnflow.mcp_servers.notify_server import notify_server
 from vulnflow.mcp_servers.registry_server import registry_check
 from vulnflow.mcp_servers.scan_server import scan_server
@@ -42,8 +45,111 @@ from vulnflow.observability.tracing import trace_span
 from vulnflow.orchestrator.approval import global_approval_gate, save_run_state
 from vulnflow.policy.engine import default_policy_engine
 from vulnflow.reporting.pr_comment import format_campaign_pr_body, format_pr_body
+from vulnflow.store.run_store import default_run_store
 
 logger = logging.getLogger("vulnflow.orchestrator.nodes")
+
+
+def _campaign_id(plan: RemediationPlan) -> str:
+    """Group equivalent remediation intents under a stable campaign identity."""
+    action = plan.action.value if hasattr(plan.action, "value") else str(plan.action)
+    raw = f"{plan.target_package}|{action}|{plan.target_version}".lower()
+    return f"CAMPAIGN-{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _merge_blast_radius(
+    local: dict[str, Any], organization: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge repository and organization graph results without duplicating nodes."""
+    tier_order = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
+    tiers = [
+        str(local.get("blast_radius_tier", "LOW")),
+        str(organization.get("blast_radius_tier", "LOW")),
+    ]
+    tier = max(tiers, key=lambda value: tier_order.get(value, 0))
+    dependents = sorted(
+        set(local.get("dependents", [])) | set(organization.get("dependents", []))
+    )
+    services = sorted(
+        set(local.get("affected_services", []))
+        | set(organization.get("affected_services", []))
+    )
+    repos = sorted(
+        set(local.get("affected_repos", []))
+        | set(organization.get("affected_repos", []))
+    )
+    return {
+        "blast_radius_tier": tier,
+        "total_affected_dependents": len(dependents),
+        "dependents": dependents,
+        "affected_services": services,
+        "affected_repos": repos,
+    }
+
+
+def _organization_graph_enabled() -> bool:
+    """Require an explicit opt-in because the built-in active graph is demo data."""
+    return os.getenv("VULNFLOW_ORGANIZATION_GRAPH_ENABLED", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _previous_plan_outcomes(
+    plan: RemediationPlan, limit: int = 3
+) -> list[dict[str, Any]]:
+    """Retrieve bounded local run history for the same remediation target."""
+    outcomes: list[dict[str, Any]] = []
+    action = plan.action.value if hasattr(plan.action, "value") else str(plan.action)
+    for run in default_run_store.list_runs(limit=100):
+        snapshot = run.get("evidence_snapshot", {})
+        if not isinstance(snapshot, dict):
+            continue
+        for old_plan in snapshot.get("plans", []):
+            if not isinstance(old_plan, dict):
+                continue
+            if old_plan.get("target_package") != plan.target_package:
+                continue
+            if str(old_plan.get("action")) != action:
+                continue
+            outcomes.append(
+                {
+                    "run_id": run.get("run_id"),
+                    "target_version": old_plan.get("target_version"),
+                    "terminal_status": run.get("terminal_status"),
+                    "tests_passed": all(
+                        result.get("success", result.get("passed", False))
+                        for result in snapshot.get("test_results", [])
+                        if isinstance(result, dict)
+                    )
+                    if snapshot.get("test_results")
+                    else None,
+                    "prs_opened": len(snapshot.get("pull_requests", [])),
+                }
+            )
+            if len(outcomes) >= limit:
+                return outcomes
+    return outcomes
+
+
+def _apply_graph_governance(
+    plan: RemediationPlan, graph_context: dict[str, Any]
+) -> bool:
+    """Escalate high-blast-radius automatic work to human review."""
+    if (
+        graph_context.get("blast_radius_tier") != "HIGH"
+        or plan.risk_tier != RiskTier.AUTO
+    ):
+        return False
+    plan.risk_tier = RiskTier.REVIEW
+    plan.requires_approval = True
+    plan.rationale = (
+        f"{plan.rationale.rstrip()}\n"
+        "• Graph Governance: Escalated to review because the dependency has a HIGH organizational blast radius."
+    )
+    return True
 
 
 def ingest_node(state: VulnFlowState) -> VulnFlowState:
@@ -66,14 +172,20 @@ def ingest_node(state: VulnFlowState) -> VulnFlowState:
                     try:
                         with open(state.report_path, "r", encoding="utf-8") as _f:
                             _snip = _f.read(3000)
-                        if '"Secret"' in _snip or '"RuleID"' in _snip or '"Fingerprint"' in _snip:
+                        if (
+                            '"Secret"' in _snip
+                            or '"RuleID"' in _snip
+                            or '"Fingerprint"' in _snip
+                        ):
                             s_name = "gitleaks"
                         elif '"runs"' in _snip and '"tool"' in _snip:
                             s_name = "sarif"
                         elif '"matches"' in _snip and '"artifact"' in _snip:
                             s_name = "grype"
                     except (OSError, UnicodeDecodeError):
-                        logger.debug("Failed reading initial report snippet for format detection")
+                        logger.debug(
+                            "Failed reading initial report snippet for format detection"
+                        )
             adapter: Any
             if "sarif" in s_name or state.report_path.endswith(".sarif"):
                 adapter = SARIFAdapter()
@@ -89,16 +201,25 @@ def ingest_node(state: VulnFlowState) -> VulnFlowState:
             try:
                 findings = adapter.parse_file(state.report_path, repo=state.repo_path)
             except (OSError, ValueError, KeyError) as exc:
-                logger.warning("Adapter %s failed to parse %s: %s; using scanner tool", adapter.__class__.__name__, state.report_path, exc)
+                logger.warning(
+                    "Adapter %s failed to parse %s: %s; using scanner tool",
+                    adapter.__class__.__name__,
+                    state.report_path,
+                    exc,
+                )
 
         if not findings:
-            raw_scan_results = scan_server.scan_run(repo=state.repo_path, scanner=state.scanner)
+            raw_scan_results = scan_server.scan_run(
+                repo=state.repo_path, scanner=state.scanner
+            )
             state.raw_findings = raw_scan_results
             for item in raw_scan_results:
                 findings.append(Finding.from_dict(item))
 
         state.findings = findings
-        state.append_audit("INGESTION_COMPLETED", "orchestrator", {"findings_count": len(findings)})
+        state.append_audit(
+            "INGESTION_COMPLETED", "orchestrator", {"findings_count": len(findings)}
+        )
         return state
 
 
@@ -154,10 +275,17 @@ def policy_node(state: VulnFlowState) -> VulnFlowState:
                     pkg_eco = "npm"
             pol = default_policy_engine.check(rc_id, "latest", pkg_eco)
             group["policy"] = pol.to_dict()
-            if pol.status in (PolicyStatus.BANNED.value, PolicyStatus.LICENSE_DENIED.value):
+            if pol.status in (
+                PolicyStatus.BANNED.value,
+                PolicyStatus.LICENSE_DENIED.value,
+            ):
                 has_blocked_package = True
 
-        state.append_audit("POLICY_EVALUATION_COMPLETED", "orchestrator", {"blocked": has_blocked_package})
+        state.append_audit(
+            "POLICY_EVALUATION_COMPLETED",
+            "orchestrator",
+            {"blocked": has_blocked_package},
+        )
         return state
 
 
@@ -167,14 +295,19 @@ def plan_node(state: VulnFlowState) -> VulnFlowState:
     default_planner_agent.reset_circuit_breaker()
     with trace_span("orchestrator.node.plan", {"run_id": state.run_id}):
         plans: list[RemediationPlan] = []
+        plan_contexts: dict[str, dict[str, Any]] = {}
+        already_audited: set[str] = set()
 
         # 1. Group all secret/PII findings into a single consolidated remediation plan (F23)
-        all_secret_findings = [f for f in state.deduped_findings if f.type == FindingType.SECRET]
+        all_secret_findings = [
+            f for f in state.deduped_findings if f.type == FindingType.SECRET
+        ]
         if all_secret_findings:
             sec_plan = default_secrets_agent.plan_consolidated_secret_remediation(
                 all_secret_findings, repo_path=state.repo_path
             )
             plans.append(sec_plan)
+            already_audited.add(sec_plan.id)
             state.append_audit(
                 "PLAN_FORMULATED",
                 "secrets_agent",
@@ -212,14 +345,28 @@ def plan_node(state: VulnFlowState) -> VulnFlowState:
                 elif prefix in ("npm", "node"):
                     pkg_eco = "npm"
 
-            advisories = advisory_search(query=clean_rc, package=clean_rc, ecosystem=pkg_eco)
+            advisories = advisory_search(
+                query=clean_rc, package=clean_rc, ecosystem=pkg_eco, limit=3
+            )
             if not advisories:
                 # Query distinct packages from findings only if different from root cause
-                other_pkgs = {f_obj.package for f_obj in findings_objs if f_obj.package and f_obj.package != clean_rc}
+                other_pkgs = {
+                    f_obj.package
+                    for f_obj in findings_objs
+                    if f_obj.package and f_obj.package != clean_rc
+                }
                 for pkg_name in other_pkgs:
-                    advisories.extend(advisory_search(query=pkg_name, package=pkg_name, ecosystem=pkg_eco))
+                    advisories.extend(
+                        advisory_search(
+                            query=pkg_name,
+                            package=pkg_name,
+                            ecosystem=pkg_eco,
+                            limit=3,
+                        )
+                    )
             if not advisories:
-                advisories = advisory_search(query=rc_id)
+                advisories = advisory_search(query=rc_id, package=clean_rc, limit=3)
+            advisories = advisories[:3]
 
             # Delegate to PlannerAgent (F16)
             plan = default_planner_agent.plan_remediation(
@@ -229,9 +376,76 @@ def plan_node(state: VulnFlowState) -> VulnFlowState:
                 ecosystem=pkg_eco,
                 is_transitive=not bool(group.get("is_direct", True)),
             )
-            plans.append(plan)
+            plan.campaign_id = _campaign_id(plan)
 
-            # Record granular audit event for each formulated plan
+            local_blast = find_blast_radius(
+                package=clean_rc,
+                version=findings_objs[0].version if findings_objs else None,
+                repo_path=state.repo_path,
+                ecosystem=pkg_eco,
+            )
+            organization_blast: dict[str, Any] = {}
+            if _organization_graph_enabled():
+                organization_blast = knowledge_server.blast_radius(
+                    package=clean_rc,
+                    version=findings_objs[0].version if findings_objs else None,
+                    ecosystem=pkg_eco,
+                )
+            graph_context = _merge_blast_radius(local_blast, organization_blast)
+            graph_escalated = _apply_graph_governance(plan, graph_context)
+
+            owners = {
+                "repository_owner": os.getenv("VULNFLOW_REPOSITORY_OWNER", "unknown"),
+                "product_owner": os.getenv("VULNFLOW_PRODUCT_OWNER", "unknown"),
+                "required_approver_groups": [
+                    group_name.strip()
+                    for group_name in os.getenv(
+                        "VULNFLOW_APPROVER_GROUPS", "security"
+                    ).split(",")
+                    if group_name.strip()
+                ],
+            }
+            plan_contexts[plan.id] = {
+                "run_id": state.run_id,
+                "current_version": findings_objs[0].version
+                if findings_objs
+                else "unknown",
+                "is_direct": bool(group.get("is_direct", True)),
+                "dependency_path": group.get("dependency_chain", []),
+                "graph": graph_context,
+                "owners": owners,
+                "campaign_id": plan.campaign_id,
+                "advisories": advisories,
+                "previous_outcomes": _previous_plan_outcomes(plan),
+            }
+            plans.append(plan)
+            state.append_audit(
+                "GRAPH_RAG_CONTEXT_BUILT",
+                "knowledge_server",
+                {
+                    "plan_id": plan.id,
+                    "campaign_id": plan.campaign_id,
+                    "blast_radius_tier": graph_context["blast_radius_tier"],
+                    "affected_services": len(graph_context["affected_services"]),
+                    "affected_repositories": len(graph_context["affected_repos"]),
+                    "retrieved_chunks": len(advisories),
+                    "previous_outcomes": len(
+                        plan_contexts[plan.id]["previous_outcomes"]
+                    ),
+                    "risk_escalated": graph_escalated,
+                },
+            )
+
+        plans = default_planner_agent.enrich_plans_batch(
+            plans,
+            plan_contexts,
+            repo_path=state.repo_path,
+        )
+
+        # Persist one plan event after batch enrichment so reports see final rationale and usage.
+        for plan in plans:
+            if plan.id in already_audited:
+                continue
             state.append_audit(
                 "PLAN_FORMULATED",
                 "planner_agent",
@@ -240,12 +454,19 @@ def plan_node(state: VulnFlowState) -> VulnFlowState:
                     "root_cause_id": plan.root_cause_id,
                     "target_package": plan.target_package,
                     "target_version": plan.target_version,
-                    "action": plan.action.value if hasattr(plan.action, "value") else str(plan.action),
-                    "risk_tier": plan.risk_tier.value if hasattr(plan.risk_tier, "value") else str(plan.risk_tier),
+                    "action": plan.action.value
+                    if hasattr(plan.action, "value")
+                    else str(plan.action),
+                    "risk_tier": plan.risk_tier.value
+                    if hasattr(plan.risk_tier, "value")
+                    else str(plan.risk_tier),
                     "requires_approval": plan.requires_approval,
-                    "policy_status": plan.policy_result.status if plan.policy_result else "APPROVED",
+                    "policy_status": plan.policy_result.status
+                    if plan.policy_result
+                    else "APPROVED",
                     "ai_rationale": plan.rationale,
-                    "llm_enrichment": default_planner_agent.last_enrichment,
+                    "llm_enrichment": default_planner_agent.plan_enrichment(plan.id),
+                    "campaign_id": plan.campaign_id,
                 },
             )
 
@@ -255,7 +476,9 @@ def plan_node(state: VulnFlowState) -> VulnFlowState:
             "planner_agent",
             default_planner_agent.enrichment_stats(),
         )
-        state.append_audit("PLANS_GENERATED", "orchestrator", {"plans_count": len(plans)})
+        state.append_audit(
+            "PLANS_GENERATED", "orchestrator", {"plans_count": len(plans)}
+        )
         return state
 
 
@@ -269,7 +492,9 @@ def approve_node(state: VulnFlowState) -> VulnFlowState:
         newly_requested: list[RemediationPlan] = []
 
         for p in state.plans:
-            tier_val = p.risk_tier.value if hasattr(p.risk_tier, "value") else str(p.risk_tier)
+            tier_val = (
+                p.risk_tier.value if hasattr(p.risk_tier, "value") else str(p.risk_tier)
+            )
             approval_status = ""
             approval_result: dict[str, Any] = {}
             if (
@@ -280,35 +505,59 @@ def approve_node(state: VulnFlowState) -> VulnFlowState:
                 approval_result = global_approval_gate.resolve_plan(state, p)
                 approval_status = approval_result.get("status", "")
 
-            if approval_status == "approved" or global_approval_gate.is_approved(p.id, repo_path=state.repo_path):
+            if approval_status == "approved" or global_approval_gate.is_approved(
+                p.id, repo_path=state.repo_path
+            ):
                 approved.append(p)
                 p.requires_approval = False
                 state.append_audit(
                     "PLAN_MANUALLY_APPROVED",
                     "approval_gate",
-                    {"plan_id": p.id, "target_package": p.target_package, "risk_tier": tier_val},
+                    {
+                        "plan_id": p.id,
+                        "target_package": p.target_package,
+                        "risk_tier": tier_val,
+                    },
                 )
-            elif approval_status == "rejected" or global_approval_gate.is_rejected(p.id, repo_path=state.repo_path):
+            elif approval_status == "rejected" or global_approval_gate.is_rejected(
+                p.id, repo_path=state.repo_path
+            ):
                 rejected.append(p)
                 dec = global_approval_gate.get_decision(p.id, repo_path=state.repo_path)
                 state.append_audit(
                     "PLAN_MANUALLY_REJECTED",
                     "approval_gate",
-                    {"plan_id": p.id, "target_package": p.target_package, "reason": dec.get("reason")},
+                    {
+                        "plan_id": p.id,
+                        "target_package": p.target_package,
+                        "reason": dec.get("reason"),
+                    },
                 )
             elif p.risk_tier == RiskTier.BLOCKED:
                 rejected.append(p)
                 state.append_audit(
                     "PLAN_BLOCKED",
                     "policy_engine",
-                    {"plan_id": p.id, "target_package": p.target_package, "reason": "Blocked by organizational policy"},
+                    {
+                        "plan_id": p.id,
+                        "target_package": p.target_package,
+                        "reason": "Blocked by organizational policy",
+                    },
                 )
-            elif not p.requires_approval or p.risk_tier == RiskTier.AUTO or getattr(state, "auto_approve", False):
+            elif (
+                not p.requires_approval
+                or p.risk_tier == RiskTier.AUTO
+                or getattr(state, "auto_approve", False)
+            ):
                 approved.append(p)
                 state.append_audit(
                     "PLAN_AUTO_APPROVED",
                     "policy_engine",
-                    {"plan_id": p.id, "target_package": p.target_package, "risk_tier": tier_val},
+                    {
+                        "plan_id": p.id,
+                        "target_package": p.target_package,
+                        "risk_tier": tier_val,
+                    },
                 )
             else:
                 pending_review.append(p)
@@ -317,7 +566,12 @@ def approve_node(state: VulnFlowState) -> VulnFlowState:
                 state.append_audit(
                     "APPROVAL_REQUESTED",
                     "policy_engine",
-                    {"plan_id": p.id, "target_package": p.target_package, "risk_tier": tier_val, "status": "pending_human_approval"},
+                    {
+                        "plan_id": p.id,
+                        "target_package": p.target_package,
+                        "risk_tier": tier_val,
+                        "status": "pending_human_approval",
+                    },
                 )
 
         # Dispatch a single consolidated digest notification for the run instead of spamming individual pings
@@ -331,7 +585,10 @@ def approve_node(state: VulnFlowState) -> VulnFlowState:
             state.append_audit(
                 "DIGEST_NOTIFICATION_SENT",
                 "notify_server",
-                {"approved_count": len(approved), "pending_count": len(newly_requested)},
+                {
+                    "approved_count": len(approved),
+                    "pending_count": len(newly_requested),
+                },
             )
 
         state.approved_plans = approved
@@ -340,7 +597,11 @@ def approve_node(state: VulnFlowState) -> VulnFlowState:
         state.append_audit(
             "APPROVAL_PROCESSED",
             "orchestrator",
-            {"approved": len(approved), "pending": len(pending_review), "rejected": len(rejected)},
+            {
+                "approved": len(approved),
+                "pending": len(pending_review),
+                "rejected": len(rejected),
+            },
         )
 
         if not approved and pending_review:
@@ -382,7 +643,9 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
             except (subprocess.SubprocessError, OSError):
                 logger.debug("Failed resolving base branch via git rev-parse")
 
-        def _apply_dependency_bump(p: RemediationPlan, branch_name: str, is_campaign: bool = False) -> dict[str, Any]:
+        def _apply_dependency_bump(
+            p: RemediationPlan, branch_name: str, is_campaign: bool = False
+        ) -> dict[str, Any]:
             diff_content = ""
             pkg_target = p.target_package or p.root_cause_id.replace("PKG-", "")
             target_file = "package.json"
@@ -391,11 +654,16 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
             req_txt = repo_p / "requirements.txt"
 
             clean_name = pkg_target.split(":")[-1]
-            is_npm_explicit = "npm:" in p.root_cause_id or (p.target_package and "npm:" in p.target_package)
+            is_npm_explicit = "npm:" in p.root_cause_id or (
+                p.target_package and "npm:" in p.target_package
+            )
             is_python_explicit = (
                 "pip:" in p.root_cause_id
                 or "python:" in p.root_cause_id
-                or (p.target_package and ("pip:" in p.target_package or "python:" in p.target_package))
+                or (
+                    p.target_package
+                    and ("pip:" in p.target_package or "python:" in p.target_package)
+                )
             )
 
             if is_python_explicit and req_txt.exists():
@@ -407,8 +675,12 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
             elif pkg_json.exists() and not req_txt.exists():
                 is_python = False
             else:
-                pkg_json_content = pkg_json.read_text(encoding="utf-8") if pkg_json.exists() else ""
-                is_python = f'"{clean_name}"' not in pkg_json_content and req_txt.exists()
+                pkg_json_content = (
+                    pkg_json.read_text(encoding="utf-8") if pkg_json.exists() else ""
+                )
+                is_python = (
+                    f'"{clean_name}"' not in pkg_json_content and req_txt.exists()
+                )
 
             if p.action == RemediationAction.REPLACE:
                 old_pkg = p.root_cause_id.replace("PKG-", "")
@@ -416,30 +688,42 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
                 if not is_python and pkg_json.exists():
                     target_file = "package.json"
                     try:
-                        _, diff_content = NPMAdapter.replace_dependency(pkg_json, old_pkg, new_pkg, p.target_version or "latest")
+                        _, diff_content = NPMAdapter.replace_dependency(
+                            pkg_json, old_pkg, new_pkg, p.target_version or "latest"
+                        )
                     except (OSError, ValueError, KeyError) as exc:
                         logger.warning("NPMAdapter replace failed: %s", exc)
             elif is_python and req_txt.exists():
                 target_file = "requirements.txt"
                 try:
-                    _, diff_content = PipAdapter.bump_dependency(req_txt, pkg_target, p.target_version or "latest")
+                    _, diff_content = PipAdapter.bump_dependency(
+                        req_txt, pkg_target, p.target_version or "latest"
+                    )
                 except (OSError, ValueError, KeyError) as exc:
                     logger.warning("PipAdapter bump failed: %s", exc)
             elif pkg_json.exists():
                 target_file = "package.json"
                 try:
-                    _, diff_content = NPMAdapter.bump_dependency(pkg_json, pkg_target, p.target_version or "latest")
+                    _, diff_content = NPMAdapter.bump_dependency(
+                        pkg_json, pkg_target, p.target_version or "latest"
+                    )
                 except (OSError, ValueError, KeyError) as exc:
                     logger.warning("NPMAdapter bump failed: %s; using patch diff", exc)
 
             if not diff_content:
-                diff_content = f"--- {target_file}\n+++ {target_file}\n- \"{p.target_package}\": \"old\"\n+ \"{p.target_package}\": \"{p.target_version}\""
+                diff_content = f'--- {target_file}\n+++ {target_file}\n- "{p.target_package}": "old"\n+ "{p.target_package}": "{p.target_version}"'
 
             res = git_server.git_patch(target_file, diff_content, state.repo_path)
             state.append_audit(
                 "PATCH_APPLIED",
                 "git_server",
-                {"plan_id": p.id, "branch": branch_name, "file": target_file, "target_version": p.target_version, "campaign": is_campaign},
+                {
+                    "plan_id": p.id,
+                    "branch": branch_name,
+                    "file": target_file,
+                    "target_version": p.target_version,
+                    "campaign": is_campaign,
+                },
             )
             return {
                 "plan_id": p.id,
@@ -452,13 +736,13 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
 
         # Partition plans by remediation type
         dep_plans = [
-            p for p in state.approved_plans
+            p
+            for p in state.approved_plans
             if p.action in (RemediationAction.BUMP, RemediationAction.REPLACE)
             and (p.target_version or p.action == RemediationAction.REPLACE)
         ]
         rotate_plans = [
-            p for p in state.approved_plans
-            if p.action == RemediationAction.ROTATE
+            p for p in state.approved_plans if p.action == RemediationAction.ROTATE
         ]
 
         # Multi-dependency campaign batching (Capability 2)
@@ -466,33 +750,60 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
             campaign_branch = f"vulnflow/campaign-{state.run_id[:8]}"
             if campaign_branch not in state.created_branches:
                 state.created_branches.append(campaign_branch)
-            git_server.git_branch(campaign_branch, state.repo_path, base_branch=base_branch)
-            state.append_audit("BRANCH_CREATED", "git_server", {"branch": campaign_branch, "repo": state.repo_path, "campaign": True})
+            git_server.git_branch(
+                campaign_branch, state.repo_path, base_branch=base_branch
+            )
+            state.append_audit(
+                "BRANCH_CREATED",
+                "git_server",
+                {"branch": campaign_branch, "repo": state.repo_path, "campaign": True},
+            )
 
             for p in dep_plans:
-                patch_record = _apply_dependency_bump(p, campaign_branch, is_campaign=True)
+                patch_record = _apply_dependency_bump(
+                    p, campaign_branch, is_campaign=True
+                )
                 patches.append(patch_record)
 
-            pkgs_str = ", ".join(p.target_package or p.root_cause_id.replace("PKG-", "") for p in dep_plans)
+            pkgs_str = ", ".join(
+                p.target_package or p.root_cause_id.replace("PKG-", "")
+                for p in dep_plans
+            )
             commit_msg = f"fix(deps): campaign remediation for {pkgs_str}"
             git_server.git_commit(commit_msg, state.repo_path)
-            state.append_audit("COMMIT_CREATED", "git_server", {"branch": campaign_branch, "message": commit_msg, "campaign": True})
+            state.append_audit(
+                "COMMIT_CREATED",
+                "git_server",
+                {"branch": campaign_branch, "message": commit_msg, "campaign": True},
+            )
 
             if base_branch:
                 git_server.git_checkout(base_branch, state.repo_path)
 
         elif len(dep_plans) == 1:
             p = dep_plans[0]
-            branch_name = f"vulnflow/fix-{p.root_cause_id.replace(':', '-').replace('PKG-', '')}"
+            branch_name = (
+                f"vulnflow/fix-{p.root_cause_id.replace(':', '-').replace('PKG-', '')}"
+            )
             if branch_name not in state.created_branches:
                 state.created_branches.append(branch_name)
             git_server.git_branch(branch_name, state.repo_path, base_branch=base_branch)
-            state.append_audit("BRANCH_CREATED", "git_server", {"branch": branch_name, "repo": state.repo_path})
+            state.append_audit(
+                "BRANCH_CREATED",
+                "git_server",
+                {"branch": branch_name, "repo": state.repo_path},
+            )
 
             patch_record = _apply_dependency_bump(p, branch_name, is_campaign=False)
             commit_msg = f"fix(deps): bump {p.target_package} to {p.target_version}"
-            git_server.git_commit(commit_msg, state.repo_path, file_path=patch_record["file"])
-            state.append_audit("COMMIT_CREATED", "git_server", {"branch": branch_name, "message": commit_msg})
+            git_server.git_commit(
+                commit_msg, state.repo_path, file_path=patch_record["file"]
+            )
+            state.append_audit(
+                "COMMIT_CREATED",
+                "git_server",
+                {"branch": branch_name, "message": commit_msg},
+            )
             patches.append(patch_record)
 
             if base_branch:
@@ -505,16 +816,22 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
             if branch_name not in state.created_branches:
                 state.created_branches.append(branch_name)
             git_server.git_branch(branch_name, state.repo_path, base_branch=base_branch)
-            state.append_audit("BRANCH_CREATED", "git_server", {"branch": branch_name, "repo": state.repo_path})
+            state.append_audit(
+                "BRANCH_CREATED",
+                "git_server",
+                {"branch": branch_name, "repo": state.repo_path},
+            )
 
             files_map: dict[str, list[dict[str, Any]]] = {}
-            for ev in (p.evidence or []):
+            for ev in p.evidence or []:
                 if isinstance(ev, dict) and ev.get("file_path"):
                     fpath = ev["file_path"]
                     files_map.setdefault(fpath, []).append(ev)
 
             if not files_map:
-                files_map["javascript_sast_vulnerabilities.js"] = [{"rule_id": p.root_cause_id.replace("secret:", "")}]
+                files_map["javascript_sast_vulnerabilities.js"] = [
+                    {"rule_id": p.root_cause_id.replace("secret:", "")}
+                ]
 
             total_modified = 0
             diff_summaries: list[str] = []
@@ -541,35 +858,63 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
                                 line_no=line_no,
                             )
                         if current_content != content:
-                            target_file_path.write_text(current_content, encoding="utf-8")
+                            target_file_path.write_text(
+                                current_content, encoding="utf-8"
+                            )
                             total_modified += 1
-                            diff_summaries.append(f"Migrated {len(items)} credential(s) in {file_rel}")
-                            git_server.git_patch(file_rel, f"--- {file_rel}\n+++ {file_rel}\nMigrated {len(items)} credentials", state.repo_path)
+                            diff_summaries.append(
+                                f"Migrated {len(items)} credential(s) in {file_rel}"
+                            )
+                            git_server.git_patch(
+                                file_rel,
+                                f"--- {file_rel}\n+++ {file_rel}\nMigrated {len(items)} credentials",
+                                state.repo_path,
+                            )
                             state.append_audit(
                                 "PATCH_APPLIED",
                                 "git_server",
-                                {"plan_id": p.id, "branch": branch_name, "file": file_rel, "action": "rotate"},
+                                {
+                                    "plan_id": p.id,
+                                    "branch": branch_name,
+                                    "file": file_rel,
+                                    "action": "rotate",
+                                },
                             )
                     except (OSError, ValueError, KeyError) as exc:
-                        logger.warning("Secret rotation file update failed for %s: %s", file_rel, exc)
+                        logger.warning(
+                            "Secret rotation file update failed for %s: %s",
+                            file_rel,
+                            exc,
+                        )
 
-            commit_msg = "fix(security): rotate exposed credentials and migrate to env vars"
+            commit_msg = (
+                "fix(security): rotate exposed credentials and migrate to env vars"
+            )
             git_server.git_commit(commit_msg, state.repo_path)
-            state.append_audit("COMMIT_CREATED", "git_server", {"branch": branch_name, "message": commit_msg})
+            state.append_audit(
+                "COMMIT_CREATED",
+                "git_server",
+                {"branch": branch_name, "message": commit_msg},
+            )
 
-            patches.append({
-                "plan_id": p.id,
-                "branch": branch_name,
-                "file": ", ".join(files_map.keys()),
-                "diff": "\n".join(diff_summaries) or "--- credentials\n+++ env vars",
-                "result": {"status": "applied", "modified_files": total_modified},
-            })
+            patches.append(
+                {
+                    "plan_id": p.id,
+                    "branch": branch_name,
+                    "file": ", ".join(files_map.keys()),
+                    "diff": "\n".join(diff_summaries)
+                    or "--- credentials\n+++ env vars",
+                    "result": {"status": "applied", "modified_files": total_modified},
+                }
+            )
 
             if base_branch:
                 git_server.git_checkout(base_branch, state.repo_path)
 
         state.patches = patches
-        state.append_audit("PATCHES_APPLIED", "orchestrator", {"patches_count": len(patches)})
+        state.append_audit(
+            "PATCHES_APPLIED", "orchestrator", {"patches_count": len(patches)}
+        )
         return state
 
 
@@ -591,12 +936,18 @@ def test_node(state: VulnFlowState) -> VulnFlowState:
             state.append_audit(
                 "BUILD_TEST_EXECUTED",
                 "build_server",
-                {"branch": branch, "passed": is_passed, "exit_code": res.get("exit_code", 0)},
+                {
+                    "branch": branch,
+                    "passed": is_passed,
+                    "exit_code": res.get("exit_code", 0),
+                },
             )
 
             # Automated Code Refactoring / Self-correction trigger if build or test fails (F20 + Capability 1)
             if not is_passed:
-                plan = next((p for p in state.approved_plans if p.id == patch["plan_id"]), None)
+                plan = next(
+                    (p for p in state.approved_plans if p.id == patch["plan_id"]), None
+                )
                 if plan:
                     # 1. Attempt autonomous code refactoring via FixerAgent
                     test_output = res.get("output", "")
@@ -618,8 +969,12 @@ def test_node(state: VulnFlowState) -> VulnFlowState:
                                 "rationale": refactor_res.get("rationale"),
                             },
                         )
-                        retest_res = build_server.build_test(state.repo_path, branch, state.ecosystem)
-                        retest_passed = retest_res.get("passed", True) and retest_res.get("build_clean", True)
+                        retest_res = build_server.build_test(
+                            state.repo_path, branch, state.ecosystem
+                        )
+                        retest_passed = retest_res.get(
+                            "passed", True
+                        ) and retest_res.get("build_clean", True)
                         if retest_passed:
                             is_passed = True
                             res = retest_res
@@ -657,7 +1012,9 @@ def test_node(state: VulnFlowState) -> VulnFlowState:
             test_results.append(res)
 
         state.test_results = test_results
-        state.append_audit("BUILD_TEST_COMPLETED", "orchestrator", {"results": test_results})
+        state.append_audit(
+            "BUILD_TEST_COMPLETED", "orchestrator", {"results": test_results}
+        )
         return state
 
 
@@ -697,7 +1054,11 @@ def pr_node(state: VulnFlowState) -> VulnFlowState:
             # Confirm registry availability before PR for dependency packages (F14)
             registry_rejected = False
             for plan in branch_plans:
-                if plan.action in (RemediationAction.BUMP, RemediationAction.REPLACE) and plan.target_version and plan.target_package:
+                if (
+                    plan.action in (RemediationAction.BUMP, RemediationAction.REPLACE)
+                    and plan.target_version
+                    and plan.target_package
+                ):
                     plan_eco = state.ecosystem
                     if ":" in plan.target_package:
                         prefix = plan.target_package.split(":", 1)[0].lower()
@@ -705,29 +1066,47 @@ def pr_node(state: VulnFlowState) -> VulnFlowState:
                             plan_eco = "PyPI"
                         elif prefix in ("npm", "node"):
                             plan_eco = "npm"
-                    reg_check = registry_check(plan.target_package, plan.target_version, plan_eco)
+                    reg_check = registry_check(
+                        plan.target_package, plan.target_version, plan_eco
+                    )
                     if not reg_check.get("available", True):
-                        logger.warning("Registry check rejected PR: %s not in registry", plan.target_version)
-                        state.append_audit("REGISTRY_CHECK_FAILED", "registry_server", reg_check)
+                        logger.warning(
+                            "Registry check rejected PR: %s not in registry",
+                            plan.target_version,
+                        )
+                        state.append_audit(
+                            "REGISTRY_CHECK_FAILED", "registry_server", reg_check
+                        )
                         registry_rejected = True
                         break
             if registry_rejected:
                 continue
 
             # Multi-dependency campaign PR format vs single-plan PR
-            is_campaign = len(branch_plans) > 1 or any(p.get("is_campaign") for p in b_patches)
+            is_campaign = len(branch_plans) > 1 or any(
+                p.get("is_campaign") for p in b_patches
+            )
             if is_campaign and len(branch_plans) > 1:
-                target_pkgs = [p.target_package or p.root_cause_id.replace("PKG-", "") for p in branch_plans]
-                pkgs_preview = ", ".join(target_pkgs[:3]) + (" and more" if len(target_pkgs) > 3 else "")
+                target_pkgs = [
+                    p.target_package or p.root_cause_id.replace("PKG-", "")
+                    for p in branch_plans
+                ]
+                pkgs_preview = ", ".join(target_pkgs[:3]) + (
+                    " and more" if len(target_pkgs) > 3 else ""
+                )
                 title = f"fix(deps): campaign remediation for {pkgs_preview} [VulnFlow]"
                 verification = getattr(state, "verification_results", None)
                 ver_dict = verification[0] if verification else None
-                pr_body = format_campaign_pr_body(plans=branch_plans, verification=ver_dict)
+                pr_body = format_campaign_pr_body(
+                    plans=branch_plans, verification=ver_dict
+                )
             else:
                 plan = branch_plans[0]
                 pr_body = format_pr_body(plan=plan)
                 if plan.action == RemediationAction.ROTATE:
-                    clean_sec = (plan.target_package or plan.root_cause_id).replace("secret:", "")
+                    clean_sec = (plan.target_package or plan.root_cause_id).replace(
+                        "secret:", ""
+                    )
                     title = f"fix(security): rotate {clean_sec} and migrate to environment variable [VulnFlow]"
                 else:
                     title = f"fix(deps): bump {plan.target_package or 'dependency'} to {plan.target_version or 'secure'} [VulnFlow]"
@@ -778,16 +1157,24 @@ def verify_node(state: VulnFlowState) -> VulnFlowState:
         state.verification_results = [ver_res.to_dict()]
 
         # Strict invariant: a failed verify is never reported as success (F22)
-        if not ver_res.verified and state.mode != "report" and state.terminal_status != "pending_approval":
+        if (
+            not ver_res.verified
+            and state.mode != "report"
+            and state.terminal_status != "pending_approval"
+        ):
             state.terminal_status = "failed_verification"
             state.exit_code = 30
             state.blocking_reason = f"Verification failed: {ver_res.details}"
-            state.append_audit("VERIFICATION_FAILED", "verifier_agent", ver_res.to_dict())
+            state.append_audit(
+                "VERIFICATION_FAILED", "verifier_agent", ver_res.to_dict()
+            )
         else:
             if state.terminal_status not in ("pending_approval", "blocked_policy"):
                 state.terminal_status = "completed"
                 state.exit_code = 0
-            state.append_audit("VERIFICATION_COMPLETED", "verifier_agent", ver_res.to_dict())
+            state.append_audit(
+                "VERIFICATION_COMPLETED", "verifier_agent", ver_res.to_dict()
+            )
 
         return state
 
@@ -800,40 +1187,71 @@ def exception_node(state: VulnFlowState) -> VulnFlowState:
         reasons: list[str] = []
 
         # Check for test/build failures
-        failed_tests = [r for r in state.test_results if not r.get("build_clean", True) or not r.get("passed", True)]
+        failed_tests = [
+            r
+            for r in state.test_results
+            if not r.get("build_clean", True) or not r.get("passed", True)
+        ]
         if failed_tests:
-            fail_outputs = [r.get("output", "").strip() for r in failed_tests if r.get("output")]
-            first_err = fail_outputs[0].splitlines()[0] if fail_outputs and fail_outputs[0] else "Non-zero test exit code"
-            reasons.append(f"Automated test suite failed ({len(failed_tests)} test run(s) failed): {first_err}")
+            fail_outputs = [
+                r.get("output", "").strip() for r in failed_tests if r.get("output")
+            ]
+            first_err = (
+                fail_outputs[0].splitlines()[0]
+                if fail_outputs and fail_outputs[0]
+                else "Non-zero test exit code"
+            )
+            reasons.append(
+                f"Automated test suite failed ({len(failed_tests)} test run(s) failed): {first_err}"
+            )
 
         # Check for banned or license-denied packages
-        banned = [p for p in state.plans if p.policy_result and p.policy_result.status in (PolicyStatus.BANNED.value, PolicyStatus.LICENSE_DENIED.value)]
+        banned = [
+            p
+            for p in state.plans
+            if p.policy_result
+            and p.policy_result.status
+            in (PolicyStatus.BANNED.value, PolicyStatus.LICENSE_DENIED.value)
+        ]
         if banned:
             banned_pkgs = ", ".join(p.target_package or p.root_cause_id for p in banned)
             reasons.append(f"Organizational policy banned package(s): {banned_pkgs}")
 
         # Check for unapproved plans
         if not state.approved_plans and not reasons:
-            reasons.append("No remediation plans were approved for automatic execution.")
+            reasons.append(
+                "No remediation plans were approved for automatic execution."
+            )
 
-        blocking_reason = " | ".join(reasons) if reasons else "Remediation blocked by automated policy safety gate."
+        blocking_reason = (
+            " | ".join(reasons)
+            if reasons
+            else "Remediation blocked by automated policy safety gate."
+        )
         state.blocking_reason = blocking_reason
 
         cve_list = sorted({cve for f in state.findings for cve in f.cve if cve})
         target_pkgs = sorted({p.target_package or p.root_cause_id for p in state.plans})
         pkg_summary = ", ".join(target_pkgs) if target_pkgs else "dependencies"
 
-        ticket = ticket_server.ticket_create("security_exception", {
-            "run_id": state.run_id,
-            "repo": state.repo_path,
-            "reason": blocking_reason,
-            "target_package": pkg_summary,
-            "cves": cve_list,
-            "plans": [p.to_dict() for p in state.plans],
-        })
+        ticket = ticket_server.ticket_create(
+            "security_exception",
+            {
+                "run_id": state.run_id,
+                "repo": state.repo_path,
+                "reason": blocking_reason,
+                "target_package": pkg_summary,
+                "cves": cve_list,
+                "plans": [p.to_dict() for p in state.plans],
+            },
+        )
         state.exception_ticket = ticket
         state.pull_requests = []  # Invariant: unapproved fix never opens PR
         state.terminal_status = "blocked_policy"
         state.exit_code = 20
-        state.append_audit("EXCEPTION_ESCALATED", "orchestrator", {"reason": blocking_reason, "ticket": ticket})
+        state.append_audit(
+            "EXCEPTION_ESCALATED",
+            "orchestrator",
+            {"reason": blocking_reason, "ticket": ticket},
+        )
         return state

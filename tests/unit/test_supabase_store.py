@@ -50,7 +50,10 @@ def test_approval_identity_ignores_random_plan_occurrence_id() -> None:
 
 def test_repository_identity_prefers_configured_provider_key(tmp_path: Any) -> None:
     assert repository_identity(str(tmp_path), "Acme/Payments") == "acme/payments"
-    assert explicit_repository_identity("Acme/Identity", "acme/payments") == "acme/identity"
+    assert (
+        explicit_repository_identity("Acme/Identity", "acme/payments")
+        == "acme/identity"
+    )
 
 
 def test_claim_approval_sends_tenant_run_and_required_groups(monkeypatch: Any) -> None:
@@ -113,10 +116,47 @@ def test_secret_key_is_not_sent_as_bearer_token(monkeypatch: Any) -> None:
     secret_store._request("GET", "example")
 
     legacy_store = SupabaseStore(
-        SupabaseConfig("https://example.supabase.co", "header.payload.signature", "acme")
+        SupabaseConfig(
+            "https://example.supabase.co", "header.payload.signature", "acme"
+        )
     )
     legacy_store._request("GET", "example")
 
     assert captured[0]["apikey"] == "sb_secret_test"
     assert "authorization" not in captured[0]
     assert captured[1]["authorization"] == "Bearer header.payload.signature"
+
+
+def test_enrichment_cache_uses_bulk_rpcs(monkeypatch: Any) -> None:
+    store = SupabaseStore(
+        SupabaseConfig(
+            url="https://example.supabase.co",
+            key="sb_secret_test",
+            organization_slug="acme",
+            repository_key="acme/payments",
+        )
+    )
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def fake_rpc(function_name: str, payload: dict[str, Any]) -> Any:
+        calls.append((function_name, payload))
+        if function_name == "vulnflow_get_enrichment_cache":
+            return [
+                {
+                    "cache_key": "ENRICH-1",
+                    "enrichment": {"plan_id": "PLAN-1"},
+                    "provider": "test",
+                }
+            ]
+        return None
+
+    monkeypatch.setattr(store, "_rpc", fake_rpc)
+    cached = store.get_enrichment_cache("/checkout", ["ENRICH-1", "ENRICH-1"])
+    store.save_enrichment_cache(
+        "/checkout",
+        [{"cache_key": "ENRICH-1", "enrichment": {"plan_id": "PLAN-1"}}],
+    )
+
+    assert cached["ENRICH-1"]["enrichment"]["plan_id"] == "PLAN-1"
+    assert calls[0][1]["p_cache_keys"] == ["ENRICH-1"]
+    assert calls[1][0] == "vulnflow_save_enrichment_cache"

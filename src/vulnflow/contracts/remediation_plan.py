@@ -27,16 +27,20 @@ class RemediationAction(str, enum.Enum):
 class RiskTier(str, enum.Enum):
     """Organizational risk tier determining autonomy vs human approval gate."""
 
-    AUTO = "auto"        # Auto-PR / auto-remediate without human blocking
-    REVIEW = "review"    # Requires explicit human approval before patch execution
-    BLOCKED = "blocked"  # Prohibited by policy or safety constraints; escalate via ticket
+    AUTO = "auto"  # Auto-PR / auto-remediate without human blocking
+    REVIEW = "review"  # Requires explicit human approval before patch execution
+    BLOCKED = (
+        "blocked"  # Prohibited by policy or safety constraints; escalate via ticket
+    )
 
 
 @dataclass
 class PolicyResult:
     """Outcome of evaluating proposed fix against organization policy rules."""
 
-    status: str = "unknown"  # "approved", "deprecated", "banned", "unknown", "license_denied"
+    status: str = (
+        "unknown"  # "approved", "deprecated", "banned", "unknown", "license_denied"
+    )
     rule_matched: Optional[str] = None
     replacement: Optional[str] = None
     reason: Optional[str] = None
@@ -100,6 +104,8 @@ class RemediationPlan:
     requires_approval: bool = True
     evidence: List[Dict[str, Any]] = field(default_factory=list)
     rationale: str = ""
+    llm_enrichment: Optional[Dict[str, Any]] = None
+    campaign_id: Optional[str] = None
     verification: Optional[VerificationResult] = None
     id: str = field(default_factory=lambda: f"PLAN-{uuid.uuid4().hex[:12]}")
     target_package: Optional[str] = None
@@ -109,15 +115,25 @@ class RemediationPlan:
             "id": self.id,
             "finding_ids": self.finding_ids,
             "root_cause_id": self.root_cause_id,
-            "action": self.action.value if isinstance(self.action, RemediationAction) else str(self.action),
+            "action": self.action.value
+            if isinstance(self.action, RemediationAction)
+            else str(self.action),
             "target_version": self.target_version,
             "target_package": self.target_package,
-            "policy_result": self.policy_result.to_dict() if isinstance(self.policy_result, PolicyResult) else self.policy_result,
-            "risk_tier": self.risk_tier.value if isinstance(self.risk_tier, RiskTier) else str(self.risk_tier),
+            "policy_result": self.policy_result.to_dict()
+            if isinstance(self.policy_result, PolicyResult)
+            else self.policy_result,
+            "risk_tier": self.risk_tier.value
+            if isinstance(self.risk_tier, RiskTier)
+            else str(self.risk_tier),
             "requires_approval": self.requires_approval,
             "evidence": self.evidence,
             "rationale": self.rationale,
-            "verification": self.verification.to_dict() if isinstance(self.verification, VerificationResult) else self.verification,
+            "llm_enrichment": self.llm_enrichment,
+            "campaign_id": self.campaign_id,
+            "verification": self.verification.to_dict()
+            if isinstance(self.verification, VerificationResult)
+            else self.verification,
         }
 
     @classmethod
@@ -160,5 +176,7 @@ class RemediationPlan:
             requires_approval=bool(data.get("requires_approval", True)),
             evidence=data.get("evidence", []),
             rationale=data.get("rationale", ""),
+            llm_enrichment=data.get("llm_enrichment"),
+            campaign_id=data.get("campaign_id"),
             verification=verification,
         )

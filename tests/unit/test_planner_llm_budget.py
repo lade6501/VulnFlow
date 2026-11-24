@@ -1,14 +1,11 @@
-"""
-tests/unit/test_planner_llm_budget.py
-Verifies selective and bounded planner model enrichment for F43.
-"""
+"""Verifies deterministic planning and run-batched model enrichment telemetry."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from tests.unit.test_reporting import FIXED_TIME, report_state
-from vulnflow.agents.planner import PlannerAgent, PlannerOutputSchema
+from vulnflow.agents.planner import PlannerAgent
 from vulnflow.contracts.finding import Finding, FindingType, LocationInfo, SeverityLevel
 from vulnflow.llm.base import LLMResponse, LLMUsage
 from vulnflow.reporting.builder import build_run_report
@@ -37,12 +34,7 @@ class CountingPlannerClient:
                 total_tokens=30,
                 cost_estimate_usd=0.003,
             ),
-            structured_data=PlannerOutputSchema(
-                target_version="4.17.21",
-                action="bump",
-                risk_tier="review",
-                rationale="Use the validated fixed version [ADV-LODASH].",
-            ),
+            structured_data=None,
         )
 
 
@@ -78,7 +70,6 @@ def test_selective_mode_skips_routine_dependency_model_call() -> None:
         client=client,  # type: ignore[arg-type]
         enable_llm=True,
         enrichment_mode="selective",
-        max_llm_calls_per_run=3,
     )
 
     plan = planner.plan_remediation(
@@ -87,16 +78,15 @@ def test_selective_mode_skips_routine_dependency_model_call() -> None:
 
     assert plan.target_version == "4.17.21"
     assert client.calls == 0
-    assert planner.last_enrichment["reason"] == "deterministic_plan_sufficient"
+    assert planner.last_enrichment["reason"] == "deferred_to_run_batch"
 
 
-def test_selective_mode_enriches_complex_dependency_within_budget() -> None:
+def test_plan_generation_never_calls_model_per_dependency() -> None:
     client = CountingPlannerClient()
     planner = PlannerAgent(
         client=client,  # type: ignore[arg-type]
         enable_llm=True,
         enrichment_mode="selective",
-        max_llm_calls_per_run=1,
     )
 
     first = planner.plan_remediation(
@@ -106,12 +96,11 @@ def test_selective_mode_enriches_complex_dependency_within_budget() -> None:
         "npm:lodash", [_finding("3.0.1")], _advisory(), ecosystem="npm"
     )
 
-    assert "validated fixed version" in first.rationale
+    assert first.target_version == "4.17.21"
     assert second.target_version == "4.17.21"
-    assert client.calls == 1
-    assert planner.last_enrichment["reason"] == "run_budget_exhausted"
-    assert planner.enrichment_stats()["model_calls"] == 1
-    assert planner.enrichment_stats()["eligible_groups"] == 2
+    assert client.calls == 0
+    assert planner.last_enrichment["reason"] == "deferred_to_run_batch"
+    assert planner.enrichment_stats()["model_calls"] == 0
 
 
 def test_complex_dependency_without_sources_stays_deterministic() -> None:
@@ -120,13 +109,12 @@ def test_complex_dependency_without_sources_stays_deterministic() -> None:
         client=client,  # type: ignore[arg-type]
         enable_llm=True,
         enrichment_mode="all",
-        max_llm_calls_per_run=3,
     )
 
     planner.plan_remediation("npm:lodash", [_finding("3.0.0")], [], ecosystem="npm")
 
     assert client.calls == 0
-    assert planner.last_enrichment["reason"] == "missing_source_evidence"
+    assert planner.last_enrichment["reason"] == "deferred_to_run_batch"
 
 
 def test_report_aggregates_executed_planner_usage_from_audit() -> None:
@@ -157,3 +145,30 @@ def test_report_aggregates_executed_planner_usage_from_audit() -> None:
     assert report.provenance.token_usage.completion_tokens == 25
     assert report.provenance.token_usage.total_tokens == 75
     assert report.provenance.estimated_cost_usd == 0.007
+
+
+def test_report_counts_shared_batch_call_usage_once() -> None:
+    state = report_state()
+    enrichment = {
+        "state": "executed",
+        "strategy": "graph_rag_run_batch",
+        "call_id": "BATCH-shared",
+        "provider": "test-provider",
+        "model": "planner-test-model",
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "total_tokens": 150,
+        "estimated_cost_usd": 0.01,
+    }
+    for plan_id in ("PLAN-one", "PLAN-two"):
+        state.audit_events.append(
+            {
+                "event_type": "PLAN_FORMULATED",
+                "payload": {"plan_id": plan_id, "llm_enrichment": enrichment},
+            }
+        )
+
+    report = build_run_report(state, generated_at=FIXED_TIME)
+
+    assert report.provenance.token_usage.total_tokens == 150
+    assert report.provenance.estimated_cost_usd == 0.01
