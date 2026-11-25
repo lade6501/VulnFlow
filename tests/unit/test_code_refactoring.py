@@ -22,7 +22,7 @@ from vulnflow.orchestrator.nodes import test_node as orchestrator_test_node
 
 def _init_test_git_repo(repo_dir: Path) -> None:
     """Initialize a mock git repository with user config for commit operations."""
-    subprocess.run(["git", "init"], cwd=str(repo_dir), check=True, capture_output=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=str(repo_dir), check=True, capture_output=True)
     subprocess.run(["git", "config", "user.name", "VulnFlow Bot"], cwd=str(repo_dir), check=True, capture_output=True)
     subprocess.run(["git", "config", "user.email", "bot@vulnflow.dev"], cwd=str(repo_dir), check=True, capture_output=True)
 
