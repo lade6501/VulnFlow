@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import os
+from collections import deque
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -22,12 +23,20 @@ from vulnflow.contracts.remediation_plan import (
     RemediationPlan,
     RiskTier,
 )
+from vulnflow.core.redaction import redact_secrets
 from vulnflow.core.risk import calculate_risk_tier
 from vulnflow.core.sanitization import (
     delimit_untrusted_content,
     detect_prompt_injection,
 )
 from vulnflow.llm import LLMClient, LLMMessage, create_llm_client
+from vulnflow.llm.base import (
+    LLMAuthenticationError,
+    LLMError,
+    LLMRateLimitError,
+    LLMStructuredOutputError,
+    LLMTimeoutError,
+)
 from vulnflow.mcp_servers.policy_server import policy_candidates, policy_check
 from vulnflow.mcp_servers.registry_server import registry_check
 from vulnflow.observability.audit_log import audit_logger
@@ -120,6 +129,24 @@ def _make_plan_id(
     return f"PLAN-{hashlib.sha256(raw).hexdigest()[:12]}"
 
 
+def _batch_failure_reason(exc: Exception, stage: str) -> str:
+    if stage == "prompt_preparation":
+        return "prompt_preparation_failed"
+    if isinstance(exc, LLMStructuredOutputError):
+        return "invalid_structured_output"
+    if stage == "response_processing":
+        return "response_processing_failed"
+    if isinstance(exc, LLMAuthenticationError):
+        return "authentication_failed"
+    if isinstance(exc, LLMRateLimitError):
+        return "rate_limited"
+    if isinstance(exc, (LLMTimeoutError, TimeoutError)):
+        return "timeout_or_network_error"
+    if isinstance(exc, LLMError):
+        return "provider_request_failed"
+    return "completion_failed"
+
+
 class PlannerAgent:
     """
     LLM reasoning agent that synthesizes vulnerability findings, advisory context,
@@ -169,11 +196,13 @@ class PlannerAgent:
             "enriched_plans": 0,
             "failed_calls": 0,
             "batch_calls": 0,
+            "batch_splits": 0,
             "cached_plans": 0,
             "campaigns": 0,
             "skip_reasons": {},
         }
         self._plan_enrichments: dict[str, dict[str, Any]] = {}
+        self._batch_failure: dict[str, Any] | None = None
         self._last_enrichment: dict[str, Any] = {
             "state": "not_run",
             "reason": "not_evaluated",
@@ -190,6 +219,8 @@ class PlannerAgent:
         stats["skip_reasons"] = dict(self._enrichment_stats["skip_reasons"])
         stats["mode"] = self.enrichment_mode
         stats["strategy"] = "graph_rag_run_batch"
+        if self._batch_failure is not None:
+            stats["batch_failure"] = dict(self._batch_failure)
         return stats
 
     def plan_enrichment(self, plan_id: str) -> dict[str, Any]:
@@ -660,7 +691,8 @@ class PlannerAgent:
         )
         request = BatchPlannerRequest(plans=trusted_context)
         user_message = (
-            "Create concise, repository-specific enrichment for these deterministic plans. Cite only supplied "
+            "Create concise, repository-specific enrichment for these deterministic plans. "
+            "Use at most three short entries per list and one sentence per text field. Cite only supplied "
             "chunk IDs. If evidence is insufficient, say so in missing_evidence instead of guessing.\n\n"
             f"TRUSTED GRAPH AND PLAN CONTEXT:\n{request.model_dump_json()}\n\n"
             + "\n\n".join(evidence_sections)
@@ -815,11 +847,12 @@ class PlannerAgent:
         except ValueError:
             batch_size = 20
 
-        for start in range(0, len(misses), batch_size):
-            batch = misses[start : start + batch_size]
-            self._llm_calls_this_run += 1
-            self._enrichment_stats["model_calls"] += 1
-            self._enrichment_stats["batch_calls"] += 1
+        pending_batches = deque(
+            (misses[start : start + batch_size], True)
+            for start in range(0, len(misses), batch_size)
+        )
+        while pending_batches:
+            batch, can_split = pending_batches.popleft()
             provider_name = (
                 self.client.get_provider_name()
                 if hasattr(self.client, "get_provider_name")
@@ -832,14 +865,21 @@ class PlannerAgent:
                     "|".join(cache_key for _, _, cache_key in batch).encode("utf-8")
                 ).hexdigest()[:12]
             )
+            stage = "prompt_preparation"
             try:
+                messages = self._batch_prompt(batch)
+                stage = "structured_completion"
+                self._llm_calls_this_run += 1
+                self._enrichment_stats["model_calls"] += 1
+                self._enrichment_stats["batch_calls"] += 1
                 response = self.client.structured_complete(
-                    messages=self._batch_prompt(batch),
+                    messages=messages,
                     response_schema=BatchPlannerOutput,
                     temperature=0.0,
                     max_retries=1,
                     max_tokens=5000,
                 )
+                stage = "response_processing"
                 output = response.structured_data
                 if not isinstance(output, BatchPlannerOutput):
                     raise TypeError(
@@ -864,6 +904,11 @@ class PlannerAgent:
                     for item in output.enrichments
                     if item.plan_id in allowed_ids
                 }
+                if len(output_by_id) != len(allowed_ids):
+                    raise LLMStructuredOutputError(
+                        "Batch response omitted one or more requested plan IDs",
+                        provider=provider_name,
+                    )
                 cache_entries: list[dict[str, Any]] = []
                 for plan_id, enrichment in output_by_id.items():
                     plan = plan_by_id[plan_id]
@@ -920,12 +965,49 @@ class PlannerAgent:
                     "returned_plans": len(output_by_id),
                 }
             except Exception as exc:  # noqa: BLE001 - deterministic plans remain valid fallback
-                self._enrichment_stats["failed_calls"] += 1
-                self._last_enrichment = {
+                if stage != "prompt_preparation":
+                    self._enrichment_stats["failed_calls"] += 1
+                failure = {
                     "state": "failed",
-                    "reason": "batch_provider_error",
+                    "reason": _batch_failure_reason(exc, stage),
+                    "stage": stage,
+                    "error_type": type(exc).__name__,
+                    "provider": redact_secrets(str(provider_name)),
+                    "model": redact_secrets(str(model_name)),
+                    "status_code": exc.status_code if isinstance(exc, LLMError) else None,
                     "call_id": call_id,
+                    "requested_plans": len(batch),
                 }
+                self._batch_failure = failure
+                self._last_enrichment = failure
+                logger.warning(
+                    "Batch enrichment failed; retaining deterministic plans: %s "
+                    "(stage=%s, provider=%s, model=%s, HTTP status=%s, batch=%s)",
+                    failure["reason"],
+                    stage,
+                    failure["provider"],
+                    failure["model"],
+                    failure["status_code"],
+                    call_id,
+                )
+                if isinstance(exc, LLMStructuredOutputError) and can_split and len(batch) > 1:
+                    middle = len(batch) // 2
+                    pending_batches.appendleft((batch[middle:], False))
+                    pending_batches.appendleft((batch[:middle], False))
+                    self._enrichment_stats["batch_splits"] += 1
+                    continue
+
+                for plan, _, _ in batch:
+                    self._plan_enrichments.setdefault(plan.id, dict(failure))
+                if isinstance(exc, LLMStructuredOutputError):
+                    continue
+                for remaining_batch, _ in pending_batches:
+                    for plan, _, _ in remaining_batch:
+                        self._plan_enrichments[plan.id] = {
+                            "state": "not_run",
+                            "reason": "earlier_batch_failed",
+                            "blocked_by_call_id": call_id,
+                        }
                 err_str = str(exc)
                 if any(
                     marker in err_str.lower()
@@ -942,9 +1024,6 @@ class PlannerAgent:
                     )
                 ):
                     self._circuit_broken = True
-                logger.warning(
-                    "Batch enrichment failed; retaining deterministic plans: %s", exc
-                )
                 break
 
         return plans

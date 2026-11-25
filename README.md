@@ -146,6 +146,8 @@ To verify a branch directly, pass its pre-remediation report:
 vulnflow verify --repo /path/to/repo --branch my-fix --report /path/to/baseline.json
 ```
 
+For CI, see the [GitHub Actions CLI workflow and npm sandbox example](docs/ci-integration.md#run-the-cli-on-the-runner).
+
 VulnFlow can be executed directly as `vulnflow` (after running `./run.sh install` or `.\run.ps1 install`), or via the universal launchers:
 - **macOS / Linux**: `./run.sh <command> [options]`
 - **Windows PowerShell**: `.\run.ps1 <command> [options]`
@@ -272,7 +274,7 @@ vulnflow approve --plan-id PLAN-ebaaef6720e2 --reviewer vp@example.com --reviewe
 
 The service-role key bypasses Row Level Security and must never be exposed to the browser or committed to the repository.
 
-Planner enrichment is graph-first and run-batched: deterministic plans are created first, auto-tier plans use no model call, and review-tier plans are enriched together. There is no run-level call-count ceiling; large runs create one model call per configured batch, never one call per dependency. Equivalent plan/graph/evidence contexts reuse `vulnflow_enrichment_cache` instead of calling the model again.
+Planner enrichment is graph-first and run-batched. Deterministic plans are created first, and review-tier plans are enriched together. If a batch still returns invalid structured output after validation retries, VulnFlow splits it once and continues with the other batches. Equivalent plan, graph, and evidence contexts reuse `vulnflow_enrichment_cache`.
 
 Organization-wide graph context is opt-in because the bundled active graph is sample data. Set `VULNFLOW_ORGANIZATION_GRAPH_ENABLED=true` only after loading real service and repository relationships; repository-local dependency graph context is always used.
 

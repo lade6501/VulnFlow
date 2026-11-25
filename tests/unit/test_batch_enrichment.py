@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
+
+import pytest
 
 from vulnflow.agents.planner import (
     BatchPlanEnrichment,
@@ -15,7 +18,13 @@ from vulnflow.contracts.remediation_plan import (
     RemediationPlan,
     RiskTier,
 )
-from vulnflow.llm.base import LLMResponse, LLMUsage
+from vulnflow.llm.base import (
+    LLMMessage,
+    LLMRateLimitError,
+    LLMResponse,
+    LLMStructuredOutputError,
+    LLMUsage,
+)
 from vulnflow.orchestrator.nodes import _apply_graph_governance
 
 
@@ -248,6 +257,106 @@ def test_large_run_calls_once_per_batch_not_once_per_dependency() -> None:
     assert client.calls == 3
     assert planner.enrichment_stats()["batch_calls"] == 3
     assert sum(plan.llm_enrichment is not None for plan in plans) == 45
+
+
+def test_failed_batch_records_safe_diagnostics_for_attempted_plans(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    class RateLimitedClient(BatchPlannerClient):
+        def structured_complete(self, **_kwargs: Any) -> LLMResponse:
+            self.calls += 1
+            raise LLMRateLimitError(
+                "private provider response body", provider="test-provider", status_code=429
+            )
+
+    monkeypatch.setenv("VULNFLOW_BATCH_ENRICHMENT_MAX_PLANS", "2")
+    plans = [_plan(f"PLAN-{index}", f"npm:package-{index}") for index in range(3)]
+    client = RateLimitedClient([])
+    planner = PlannerAgent(client=client, enable_llm=True)  # type: ignore[arg-type]
+    original_rationales = [plan.rationale for plan in plans]
+
+    planner.enrich_plans_batch(
+        plans, {plan.id: _context(plan) for plan in plans}, repo_path="acme/payments"
+    )
+
+    stats = planner.enrichment_stats()
+    assert client.calls == stats["failed_calls"] == stats["model_calls"] == 1
+    failure = stats["batch_failure"]
+    assert failure["reason"] == "rate_limited"
+    assert failure["stage"] == "structured_completion"
+    assert failure["status_code"] == 429
+    assert failure["requested_plans"] == 2
+    assert planner.plan_enrichment(plans[0].id) == failure
+    assert planner.plan_enrichment(plans[1].id) == failure
+    assert planner.plan_enrichment(plans[2].id) == {
+        "state": "not_run",
+        "reason": "earlier_batch_failed",
+        "blocked_by_call_id": failure["call_id"],
+    }
+    assert [plan.rationale for plan in plans] == original_rationales
+    assert "private provider response body" not in caplog.text
+    assert "private provider response body" not in str(stats)
+
+
+def test_prompt_preparation_failure_does_not_count_as_a_model_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = _plan("PLAN-one", "npm:package-one")
+    client = BatchPlannerClient([plan.id])
+    planner = PlannerAgent(client=client, enable_llm=True)  # type: ignore[arg-type]
+
+    def invalid_prompt(_batch: Any) -> None:
+        raise ValueError("prompt validation failure")
+
+    monkeypatch.setattr(planner, "_batch_prompt", invalid_prompt)
+    planner.enrich_plans_batch([plan], {plan.id: _context(plan)}, repo_path="acme/payments")
+
+    stats = planner.enrichment_stats()
+    assert client.calls == stats["model_calls"] == stats["failed_calls"] == 0
+    assert stats["batch_failure"]["reason"] == "prompt_preparation_failed"
+    assert planner.plan_enrichment(plan.id)["state"] == "failed"
+
+
+def test_invalid_output_splits_once_and_preserves_later_batches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FormattingFailureClient(BatchPlannerClient):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.attempts: list[list[str]] = []
+
+        def structured_complete(self, **kwargs: Any) -> LLMResponse:
+            self.plan_ids = json.loads(kwargs["messages"][0].content)
+            self.attempts.append(self.plan_ids)
+            if "PLAN-0" in self.plan_ids:
+                raise LLMStructuredOutputError("Invalid JSON")
+            return super().structured_complete(**kwargs)
+
+    monkeypatch.setenv("VULNFLOW_BATCH_ENRICHMENT_MAX_PLANS", "3")
+    plans = [_plan(f"PLAN-{index}", f"npm:package-{index}") for index in range(5)]
+    client = FormattingFailureClient()
+    planner = PlannerAgent(client=client, enable_llm=True)  # type: ignore[arg-type]
+    monkeypatch.setattr(
+        planner,
+        "_batch_prompt",
+        lambda batch: [
+            LLMMessage(role="user", content=json.dumps([plan.id for plan, _, _ in batch]))
+        ],
+    )
+
+    planner.enrich_plans_batch(
+        plans, {plan.id: _context(plan) for plan in plans}, repo_path="acme/payments"
+    )
+
+    assert client.attempts == [
+        ["PLAN-0", "PLAN-1", "PLAN-2"], ["PLAN-0"], ["PLAN-1", "PLAN-2"], ["PLAN-3", "PLAN-4"],
+    ]
+    stats = planner.enrichment_stats()
+    assert stats["batch_splits"] == 1
+    assert stats["failed_calls"] == 2
+    assert stats["enriched_plans"] == 4
+    assert planner.plan_enrichment("PLAN-0")["state"] == "failed"
+    assert all(planner.plan_enrichment(p.id)["state"] == "executed" for p in plans[1:])
 
 
 def test_high_graph_blast_radius_escalates_auto_plan_to_review() -> None:

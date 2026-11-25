@@ -18,32 +18,31 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("vulnflow.llm.structured")
 
+_JSON_START = re.compile(r'\{\s*(?=["}])|\[\s*(?=[\[\]{}"0-9-]|true\b|false\b|null\b)')
+
 
 def extract_json(raw_text: str) -> str:
-    """
-    Extract a valid JSON string from raw text that may include markdown code blocks
-    or conversational commentary.
-    """
+    """Extract one complete JSON value from a plain or wrapped response."""
     text = raw_text.strip()
+    text = re.sub(r"^(?:<think>.*?</think>\s*)+", "", text, flags=re.DOTALL)
 
-    # Look for markdown code fence with json or generic syntax
-    fence_pattern = r"```(?:json)?\s*([\s\S]*?)\s*```"
-    match = re.search(fence_pattern, text, re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
+    fence = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, re.IGNORECASE | re.DOTALL)
+    if fence:
+        return fence.group(1)
 
-    # If no fence found, find outermost JSON object { ... } or array [ ... ]
-    first_brace = text.find("{")
-    last_brace = text.rfind("}")
-    first_bracket = text.find("[")
-    last_bracket = text.rfind("]")
-
-    if first_brace != -1 and last_brace != -1 and (first_bracket == -1 or first_brace < first_bracket):
-        return text[first_brace : last_brace + 1].strip()
-    elif first_bracket != -1 and last_bracket != -1:
-        return text[first_bracket : last_bracket + 1].strip()
-
-    return text
+    if text.startswith(("{", "[")):
+        start = 0
+    else:
+        match = _JSON_START.search(text)
+        if not match:
+            return text
+        start = match.start()
+    # Decode the outer container as supplied. A truncated object must fail, even
+    # if some of its nested objects happen to be complete.
+    _, end = json.JSONDecoder().raw_decode(text, start)
+    if _JSON_START.search(text, end):
+        raise json.JSONDecodeError("Multiple JSON values", text, end)
+    return text[start:end]
 
 
 def get_schema_representation(response_schema: Union[Type[Any], Dict[str, Any]]) -> str:
@@ -145,11 +144,11 @@ def validate_structured_output(
         )
 
     last_error: Optional[str] = None
-    response: Optional[LLMResponse] = None
+    request_messages = active_messages
 
     for attempt in range(max_retries + 1):
         response = client.complete(
-            messages=active_messages,
+            messages=request_messages,
             model=model,
             temperature=temperature,
             **kwargs,
@@ -160,7 +159,12 @@ def validate_structured_output(
             response.structured_data = validated
             return response
         except (json.JSONDecodeError, ValueError, TypeError) as exc:
-            last_error = f"{exc.__class__.__name__}: {str(exc)}"
+            if response.finish_reason in {"length", "max_tokens"}:
+                last_error = "Response reached the output-token limit before it validated"
+            elif isinstance(exc, json.JSONDecodeError):
+                last_error = f"JSONDecodeError: {exc.msg} at line {exc.lineno}, column {exc.colno}"
+            else:
+                last_error = f"{type(exc).__name__}: response does not match the required schema"
             logger.warning(
                 "Structured output validation failed on attempt %d/%d: %s",
                 attempt + 1,
@@ -169,19 +173,18 @@ def validate_structured_output(
             )
 
             if attempt < max_retries:
-                # Add failure context and retry
-                active_messages.append(LLMMessage(role="assistant", content=response.content))
-                active_messages.append(
+                # Retry from the original request without replaying malformed output.
+                request_messages = [
+                    *active_messages,
                     LLMMessage(
                         role="user",
                         content=(
-                            f"The output could not be validated against the required schema.\n"
-                            f"Error details: {last_error}\n"
-                            f"Please correct the error and return ONLY the valid JSON object conforming strictly "
-                            f"to the schema:\n```json\n{schema_spec}\n```"
+                            f"The previous output could not be validated: {last_error}.\n"
+                            "Return one concise, complete JSON value matching the supplied schema. "
+                            "Do not include reasoning, Markdown fences, or additional text."
                         ),
-                    )
-                )
+                    ),
+                ]
 
     raise LLMStructuredOutputError(
         f"Failed to produce structured output adhering to schema after {max_retries + 1} attempts. Last error: {last_error}",
