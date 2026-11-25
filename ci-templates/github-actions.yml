@@ -1,6 +1,7 @@
 # ci-templates/github-actions.yml
 # GitHub Actions workflow template executing VulnFlow scans and remediation.
 # Supports both direct runner execution and containerized execution with Supabase approval persistence.
+# For the CLI workflow with an offline build sandbox and approval resume, see docs/ci-integration.md.
 
 name: VulnFlow Remediation Pipeline
 
