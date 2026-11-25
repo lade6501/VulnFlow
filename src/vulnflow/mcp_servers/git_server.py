@@ -5,6 +5,7 @@ MCP tool server executing git operations, branch creation, commits, and PRs.
 
 from __future__ import annotations
 
+import difflib
 import logging
 import os
 import re
@@ -28,19 +29,18 @@ class GitServer:
     """Tool server executing repository operations, branch creation, and PR management over MCP."""
 
     def __init__(self) -> None:
-        self._open_prs: Dict[str, Dict[str, Any]] = {}
-        self._pr_counter = 1
+        self._open_prs: Dict[tuple[str, str, str], Dict[str, Any]] = {}
         self.mcp = mcp
 
-    def _extract_repo_name(self, repo_dir: Optional[str] = None) -> str:
-        """Extract 'owner/repo' slug from the git remote origin of repo_dir, or fallback."""
+    def _extract_repo_name(self, repo_dir: Optional[str] = None) -> str | None:
+        """Extract the GitHub repository from the effective push URL."""
         if not repo_dir:
-            return "vulnflow/sample-repo"
+            return None
         repo_path = Path(repo_dir)
         if (repo_path / ".git").exists():
             try:
                 res = subprocess.run(
-                    ["git", "config", "--get", "remote.origin.url"],
+                    ["git", "remote", "get-url", "--push", "--all", "origin"],
                     cwd=str(repo_path),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -49,53 +49,104 @@ class GitServer:
                 )
                 url = res.stdout.strip()
                 if url:
-                    m = re.search(r"github\.com[:/]([^/]+)/([^/\.]+)", url)
+                    m = re.fullmatch(
+                        r"(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)"
+                        r"([\w-]+)/([\w.-]+?)(?:\.git)?/?",
+                        url,
+                        flags=re.ASCII,
+                    )
                     if m:
                         return f"{m.group(1)}/{m.group(2)}"
             except Exception as exc:
                 logger.debug("Could not read git remote in %s: %s", repo_dir, exc)
-        return "vulnflow/sample-repo"
+        return None
 
     def git_clone(self, repo_url: str, target_dir: str) -> Dict[str, Any]:
         """MCP tool: git_clone - Clones repo into target directory."""
         logger.info("Cloning %s into %s", repo_url, target_dir)
-        return {"status": "cloned", "path": target_dir, "ref": "main"}
+        target = Path(target_dir)
+        if target.exists() and any(target.iterdir()):
+            return {
+                "status": "failed",
+                "path": target_dir,
+                "error": "Clone target already exists and is not empty",
+            }
+        result = subprocess.run(
+            ["git", "clone", "--", repo_url, target_dir],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return {
+                "status": "failed",
+                "path": target_dir,
+                "error": result.stderr.strip(),
+            }
+        return {"status": "cloned", "path": target_dir, "ref": "HEAD"}
 
-    def git_branch(self, branch_name: str, repo_dir: str, base_branch: Optional[str] = None) -> Dict[str, Any]:
+    def git_branch(
+        self, branch_name: str, repo_dir: str, base_branch: Optional[str] = None,
+        *, replace_existing: bool = False,
+    ) -> Dict[str, Any]:
         """MCP tool: git_branch - Creates or switches to remediation branch on disk."""
         logger.info("Creating branch %s in %s", branch_name, repo_dir)
         repo_path = Path(repo_dir)
         if (repo_path / ".git").exists():
             try:
-                cmd = ["git", "checkout", "-B", branch_name]
+                cmd = ["git", "-c", "core.hooksPath=/dev/null", "checkout", "-B" if replace_existing else "-b", branch_name]
                 if base_branch:
                     cmd.append(base_branch)
-                subprocess.run(
+                result = subprocess.run(
                     cmd,
                     cwd=str(repo_path),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     check=False,
                 )
+                if result.returncode != 0:
+                    return {
+                        "status": "failed",
+                        "branch": branch_name,
+                        "error": result.stderr.decode(errors="replace").strip(),
+                    }
             except Exception as exc:
-                logger.warning("Could not execute git checkout -B %s in %s: %s", branch_name, repo_dir, exc)
-        return {"status": "created", "branch": branch_name}
+                logger.warning("Could not create branch %s in %s: %s", branch_name, repo_dir, exc)
+                return {"status": "failed", "branch": branch_name, "error": str(exc)}
+            return {"status": "created", "branch": branch_name}
+        return {
+            "status": "failed",
+            "branch": branch_name,
+            "error": "Repository is not a git checkout",
+        }
 
     def git_checkout(self, branch_name: str, repo_dir: str) -> Dict[str, Any]:
         """Switch working tree back to specified branch."""
         repo_path = Path(repo_dir)
         if (repo_path / ".git").exists():
             try:
-                subprocess.run(
-                    ["git", "checkout", branch_name],
+                result = subprocess.run(
+                    ["git", "-c", "core.hooksPath=/dev/null", "checkout", branch_name],
                     cwd=str(repo_path),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     check=False,
                 )
+                if result.returncode != 0:
+                    return {
+                        "status": "failed",
+                        "branch": branch_name,
+                        "error": result.stderr.decode(errors="replace").strip(),
+                    }
             except Exception as exc:
                 logger.warning("Could not checkout %s in %s: %s", branch_name, repo_dir, exc)
-        return {"status": "checked_out", "branch": branch_name}
+                return {"status": "failed", "branch": branch_name, "error": str(exc)}
+            return {"status": "checked_out", "branch": branch_name}
+        return {
+            "status": "failed",
+            "branch": branch_name,
+            "error": "Repository is not a git checkout",
+        }
 
     def git_has_branch(self, branch_name: str, repo_dir: str) -> bool:
         """Check if branch exists in the repository."""
@@ -127,17 +178,15 @@ class GitServer:
         deleted = False
         if (repo_path / ".git").exists():
             try:
-                # 1. Switch back to main or master
-                for fallback in ("main", "master"):
-                    res = subprocess.run(
-                        ["git", "checkout", fallback],
-                        cwd=str(repo_path),
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        check=False,
-                    )
-                    if res.returncode == 0:
-                        break
+                current = subprocess.run(
+                    ["git", "branch", "--show-current"], cwd=repo_path,
+                    capture_output=True, text=True, check=True,
+                ).stdout.strip()
+                if current == branch_name:
+                    for fallback in ("main", "master"):
+                        res = self.git_checkout(fallback, str(repo_path))
+                        if res.get("status") == "checked_out":
+                            break
                 # 2. Delete branch
                 del_cmd = ["git", "branch", "-D" if force else "-d", branch_name]
                 del_res = subprocess.run(
@@ -154,28 +203,55 @@ class GitServer:
         return {"status": "deleted" if deleted else "not_found", "branch": branch_name}
 
     def git_patch(self, file_path: str, diff: str, repo_dir: str) -> Dict[str, Any]:
-        """MCP tool: git_patch - Applies unified diff to target file."""
-        logger.info("Applying patch to %s in %s", file_path, repo_dir)
-        return {"status": "applied", "file": file_path, "hunks": 1}
+        """Record an already-applied adapter change only when git can observe it."""
+        logger.info("Validating patch to %s in %s", file_path, repo_dir)
+        repo_path = Path(repo_dir)
+        if not (repo_path / ".git").exists():
+            return {
+                "status": "failed",
+                "file": file_path,
+                "error": "Repository is not a git checkout",
+            }
+        result = subprocess.run(
+            ["git", "diff", "--", file_path],
+            cwd=str(repo_path),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return {
+                "status": "failed",
+                "file": file_path,
+                "error": result.stderr.strip(),
+            }
+        if not result.stdout.strip():
+            return {
+                "status": "noop",
+                "file": file_path,
+                "error": "No working-tree change was detected",
+            }
+        return {"status": "applied", "file": file_path, "hunks": diff.count("@@") or 1}
 
     def git_commit(self, message: str, repo_dir: str, file_path: Optional[str] = None) -> Dict[str, Any]:
         """MCP tool: git_commit - Commits staged changes on disk."""
         logger.info("Committing in %s with message: %s", repo_dir, message)
         repo_path = Path(repo_dir)
-        commit_sha = "a1b2c3d4e5f67890"
+        commit_sha: str | None = None
         if (repo_path / ".git").exists():
             try:
-                if file_path:
-                    subprocess.run(["git", "add", file_path], cwd=str(repo_path), stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
-                else:
-                    subprocess.run(["git", "add", "-u"], cwd=str(repo_path), stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+                add_args = ["--", file_path] if file_path else ["-u"]
+                subprocess.run(
+                    ["git", "add", *add_args], cwd=repo_path,
+                    capture_output=True, text=True, check=True,
+                )
                 env = os.environ.copy()
                 env.setdefault("GIT_AUTHOR_NAME", "VulnFlow Bot")
                 env.setdefault("GIT_AUTHOR_EMAIL", "bot@vulnflow.dev")
                 env.setdefault("GIT_COMMITTER_NAME", "VulnFlow Bot")
                 env.setdefault("GIT_COMMITTER_EMAIL", "bot@vulnflow.dev")
-                subprocess.run(
-                    ["git", "commit", "-m", message],
+                commit_result = subprocess.run(
+                    ["git", "-c", "core.hooksPath=/dev/null", "commit", "-m", message],
                     cwd=str(repo_path),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -183,6 +259,13 @@ class GitServer:
                     text=True,
                     check=False,
                 )
+                if commit_result.returncode != 0:
+                    return {
+                        "status": "failed",
+                        "commit_sha": None,
+                        "error": commit_result.stderr.strip()
+                        or commit_result.stdout.strip(),
+                    }
                 rev_res = subprocess.run(
                     ["git", "rev-parse", "HEAD"],
                     cwd=str(repo_path),
@@ -195,7 +278,94 @@ class GitServer:
                     commit_sha = rev_res.stdout.strip()
             except Exception as exc:
                 logger.warning("Could not execute git commit in %s: %s", repo_dir, exc)
-        return {"status": "committed", "commit_sha": commit_sha}
+                return {"status": "failed", "commit_sha": None, "error": str(exc)}
+            if not commit_sha:
+                return {
+                    "status": "failed",
+                    "commit_sha": None,
+                    "error": "Commit completed without a verifiable revision",
+                }
+            return {"status": "committed", "commit_sha": commit_sha}
+        return {
+            "status": "failed",
+            "commit_sha": None,
+            "error": "Repository is not a git checkout",
+        }
+
+    def git_replace_text(
+        self,
+        repo_dir: str,
+        branch: str,
+        file_path: str,
+        old_text: str,
+        new_text: str,
+        commit_message: str,
+    ) -> Dict[str, Any]:
+        """Apply one exact source replacement on a checked-out remediation branch."""
+        repo_path = Path(repo_dir).resolve()
+        target = repo_path / file_path
+        if Path(file_path).is_absolute() or not target.resolve().is_relative_to(repo_path):
+            return {
+                "status": "failed",
+                "file": file_path,
+                "error": "Target path escapes the repository or is a symlink",
+            }
+        if not (repo_path / ".git").exists():
+            return {
+                "status": "failed",
+                "file": file_path,
+                "error": "Repository or target file does not exist",
+            }
+        current = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(repo_path),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        current_branch = current.stdout.strip() if current.returncode == 0 else ""
+        if branch and current_branch != branch:
+            checkout = self.git_checkout(branch, str(repo_path))
+            if checkout.get("status") != "checked_out":
+                return {"status": "failed", "file": file_path, "error": checkout.get("error")}
+        try:
+            if target != target.resolve() or not target.is_file():
+                return {"status": "failed", "file": file_path, "error": "Target is not a regular repository file"}
+            content = target.read_text(encoding="utf-8")
+            if not old_text or old_text == new_text or content.count(old_text) != 1:
+                return {
+                    "status": "failed",
+                    "file": file_path,
+                    "error": "Expected source text was not found exactly once",
+                }
+            new_content = content.replace(old_text, new_text, 1)
+            target.write_text(new_content, encoding="utf-8")
+            diff = "".join(
+                difflib.unified_diff(
+                    content.splitlines(keepends=True),
+                    new_content.splitlines(keepends=True),
+                    fromfile=f"a/{file_path}",
+                    tofile=f"b/{file_path}",
+                )
+            )
+            commit = self.git_commit(commit_message, str(repo_path), file_path=file_path)
+            if commit.get("status") != "committed":
+                return {
+                    "status": "failed",
+                    "file": file_path,
+                    "error": commit.get("error"),
+                }
+            return {
+                "status": "applied",
+                "file": file_path,
+                "diff": diff,
+                "commit_sha": commit.get("commit_sha"),
+            }
+        except OSError as exc:
+            return {"status": "failed", "file": file_path, "error": str(exc)}
+        finally:
+            if current_branch and current_branch != branch:
+                self.git_checkout(current_branch, str(repo_path))
 
     def pr_create(
         self,
@@ -203,36 +373,66 @@ class GitServer:
         body: str,
         title: Optional[str] = None,
         repo_dir: Optional[str] = None,
+        expected_revision: str | None = None,
     ) -> Dict[str, Any]:
         """
         MCP tool: pr_create - Opens pull request targeting the concerned repository.
         Guarantees idempotency: reruns on the same branch do not duplicate PRs.
         """
-        if branch in self._open_prs:
-            logger.info("PR for branch '%s' already exists; returning existing PR without duplicate", branch)
-            return self._open_prs[branch]
-
         repo_slug = self._extract_repo_name(repo_dir)
 
-        # 1. Ensure branch is pushed to remote origin if remote is configured so GitHub API recognizes head ref
-        if repo_dir:
-            repo_path = Path(repo_dir)
-            if (repo_path / ".git").exists():
-                try:
-                    push_res = subprocess.run(
-                        ["git", "push", "-u", "origin", branch],
-                        cwd=str(repo_path),
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        check=False,
-                    )
-                    if push_res.returncode == 0:
-                        logger.info("Successfully pushed branch %s to origin before PR creation", branch)
-                    else:
-                        logger.warning("git push origin %s returned code %d: %s", branch, push_res.returncode, push_res.stderr.strip())
-                except Exception as exc:
-                    logger.debug("Failed to push branch %s to origin before PR creation: %s", branch, exc)
+        if not repo_dir or not (Path(repo_dir) / ".git").exists():
+            return {
+                "status": "preview",
+                "branch": branch,
+                "repo": repo_slug,
+                "title": title or f"fix(deps): automated remediation on {branch}",
+                "body": body,
+                "pr_url": None,
+                "error": "A real git repository is required to create a pull request",
+            }
+        if not github_mcp_bridge.token:
+            return {
+                "status": "preview",
+                "branch": branch,
+                "repo": repo_slug,
+                "title": title or f"fix(deps): automated remediation on {branch}",
+                "body": body,
+                "pr_url": None,
+                "error": "GitHub credentials are not configured",
+            }
+        if not repo_slug:
+            return {"status": "failed", "branch": branch, "error": "Expected one GitHub origin push URL"}
+
+        repo_path = Path(repo_dir)
+        try:
+            ref = f"refs/heads/{branch}"
+            revision = subprocess.run(
+                ["git", "rev-parse", "--verify", "--end-of-options", ref],
+                cwd=repo_path, capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            if expected_revision is not None and revision != expected_revision:
+                return {"status": "failed", "branch": branch, "error": "Branch moved after verification"}
+            cache_key = (repo_slug.lower(), branch, revision)
+            if cache_key in self._open_prs:
+                return dict(self._open_prs[cache_key])
+            push_res = subprocess.run(
+                ["git", "-c", "core.hooksPath=/dev/null", "push", "origin", f"{revision}:{ref}"],
+                timeout=60,
+                cwd=str(repo_path),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"status": "failed", "branch": branch, "error": str(exc)}
+        if push_res.returncode != 0:
+            return {
+                "status": "failed",
+                "branch": branch,
+                "error": push_res.stderr.strip(),
+            }
 
         # 2. Attempt to open real PR via GitHub MCP server or API if configured
         if "/" in repo_slug:
@@ -245,28 +445,19 @@ class GitServer:
                 base="main",
                 body=body,
             )
-            if gh_res:
+            if gh_res and gh_res.get("status") == "opened" and gh_res.get("pr_url"):
                 gh_res["branch"] = branch
                 gh_res["repo"] = repo_slug
                 gh_res["title"] = title or f"fix(deps): automated remediation on {branch}"
-                self._open_prs[branch] = gh_res
+                self._open_prs[cache_key] = dict(gh_res)
                 return gh_res
 
-        # 2. Local fallback format
-        pr_num = self._pr_counter
-        self._pr_counter += 1
-        pr_record = {
-            "status": "opened",
-            "pr_url": f"https://github.com/{repo_slug}/pull/{pr_num}",
-            "pr_number": pr_num,
+        return {
+            "status": "failed",
             "branch": branch,
             "repo": repo_slug,
-            "title": title or f"fix(deps): automated remediation on {branch}",
-            "body": body,
+            "error": "GitHub did not confirm pull request creation",
         }
-        self._open_prs[branch] = pr_record
-        logger.info("Opened new PR #%d for %s: %s", pr_num, repo_slug, pr_record["pr_url"])
-        return pr_record
 
 
 # Global instance
@@ -299,9 +490,29 @@ def git_commit(message: str, repo_dir: str, file_path: Optional[str] = None) -> 
     return git_server.git_commit(message, repo_dir, file_path=file_path)
 
 
+@mcp.tool(
+    name="git_replace_text",
+    description="Applies one exact source replacement and commits it on a remediation branch.",
+)
+def git_replace_text(
+    repo_dir: str,
+    branch: str,
+    file_path: str,
+    old_text: str,
+    new_text: str,
+    commit_message: str,
+) -> Dict[str, Any]:
+    return git_server.git_replace_text(
+        repo_dir, branch, file_path, old_text, new_text, commit_message
+    )
+
+
 @mcp.tool(name="pr_create", description="Opens pull request targeting the concerned repository.")
-def pr_create(branch: str, body: str, title: Optional[str] = None, repo_dir: Optional[str] = None) -> Dict[str, Any]:
-    return git_server.pr_create(branch, body, title, repo_dir=repo_dir)
+def pr_create(
+    branch: str, body: str, title: Optional[str] = None, repo_dir: Optional[str] = None,
+    expected_revision: str | None = None,
+) -> Dict[str, Any]:
+    return git_server.pr_create(branch, body, title, repo_dir=repo_dir, expected_revision=expected_revision)
 
 
 @mcp.tool(name="git_cleanup_branch", description="Deletes an orphan remediation branch.")

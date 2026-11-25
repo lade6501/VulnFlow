@@ -95,6 +95,12 @@ def test_attempt_code_refactor_applies_patch_and_commits(tmp_path: Path) -> None
     # Initial commit
     subprocess.run(["git", "add", "."], cwd=str(tmp_path), check=True, capture_output=True)
     subprocess.run(["git", "commit", "-m", "initial"], cwd=str(tmp_path), check=True, capture_output=True)
+    subprocess.run(
+        ["git", "branch", "vulnflow/fix-urllib3"],
+        cwd=str(tmp_path),
+        check=True,
+        capture_output=True,
+    )
 
     plan = RemediationPlan(
         id="PLAN-URLLIB3",
@@ -147,6 +153,12 @@ def test_test_node_heals_breaking_change_via_refactoring(tmp_path: Path) -> None
     test_file.write_text("from urllib3.packages.six.moves import urllib\n", encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=str(tmp_path), check=True, capture_output=True)
     subprocess.run(["git", "commit", "-m", "initial"], cwd=str(tmp_path), check=True, capture_output=True)
+    subprocess.run(
+        ["git", "branch", "vulnflow/fix-urllib3"],
+        cwd=str(tmp_path),
+        check=True,
+        capture_output=True,
+    )
 
     plan = RemediationPlan(
         id="PLAN-URLLIB3",

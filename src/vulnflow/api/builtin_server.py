@@ -24,8 +24,16 @@ if str(_REPO_ROOT / "vulnflow") not in sys.path:
 
 from api.routes.approvals import list_pending_approvals, submit_approval
 from api.routes.graph import get_graph_data
-from api.routes.runs import get_run, get_run_report, list_runs, trigger_run
-from api.routes.webhooks import handle_scan_webhook
+from api.routes.runs import RunQueueFull, enqueue_run, get_run, get_run_report, list_runs
+from api.security import (
+    MAX_REQUEST_BYTES,
+    ApiSecurityError,
+    configured_cors_origins,
+    mutation_authorized,
+    validate_repo_path,
+    validate_run_payload,
+    webhook_signature_valid,
+)
 from vulnflow.contracts.approval import (
     ApprovalDecisionRequest,
     PendingApprovalListResponse,
@@ -49,11 +57,18 @@ class VulnFlowBuiltinHandler(http.server.BaseHTTPRequestHandler):
     ) -> None:
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(length))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        request_origin = self.headers.get("Origin", "")
+        allowed_origins = configured_cors_origins()
+        if request_origin in allowed_origins:
+            self.send_header("Access-Control-Allow-Origin", request_origin)
+            self.send_header("Vary", "Origin")
         self.send_header(
-            "Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE"
+            "Access-Control-Allow-Methods", "GET, POST, OPTIONS"
         )
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization, X-VulnFlow-Signature",
+        )
         self.end_headers()
 
     def _send_json(self, status: int, data: Any) -> None:
@@ -129,7 +144,9 @@ class VulnFlowBuiltinHandler(http.server.BaseHTTPRequestHandler):
             if path == "/api/approvals":
                 repo = params.get("repo", [""])[0]
                 response = PendingApprovalListResponse(
-                    plans=list_pending_approvals(repo_path=repo or None)
+                    plans=list_pending_approvals(
+                        repo_path=validate_repo_path(repo) if repo else None
+                    )
                 )
                 self._send_json(200, response)
                 return
@@ -138,12 +155,16 @@ class VulnFlowBuiltinHandler(http.server.BaseHTTPRequestHandler):
             if path == "/api/graph":
                 pkg = params.get("package", ["npm:lodash"])[0]
                 repo = params.get("repo", ["workspace"])[0]
+                if repo != "workspace":
+                    repo = validate_repo_path(repo)
                 self._send_json(200, get_graph_data(package=pkg, repo=repo))
                 return
 
             # 7. Static files and SPA fallback
             self._serve_static_or_spa(path)
 
+        except ApiSecurityError as exc:
+            self._send_json(422, {"error": str(exc)})
         except Exception as exc:
             logger.exception("Error handling GET %s: %s", path, exc)
             self._send_json(500, {"error": str(exc)})
@@ -155,46 +176,65 @@ class VulnFlowBuiltinHandler(http.server.BaseHTTPRequestHandler):
 
         try:
             content_len = int(self.headers.get("Content-Length", 0))
+            if content_len > MAX_REQUEST_BYTES:
+                self.close_connection = True
+                self._send_json(413, {"error": "Payload too large"})
+                return
             raw_body = self.rfile.read(content_len) if content_len > 0 else b"{}"
-            try:
-                body = json.loads(raw_body.decode("utf-8")) if raw_body else {}
-            except Exception:
-                body = {}
 
             # 1. Trigger run
             if path == "/api/runs":
-                res = trigger_run(body)
-                self._send_json(200, res)
+                if not mutation_authorized(
+                    {key.lower(): value for key, value in self.headers.items()}
+                ):
+                    self._send_json(401, {"error": "Unauthorized"})
+                    return
+                res = enqueue_run(validate_run_payload(json.loads(raw_body)))
+                self._send_json(202, res)
                 return
 
             # 2. Scanner Webhook
             if path == "/api/webhooks":
-                res = handle_scan_webhook(body)
-                self._send_json(200, res)
+                if not webhook_signature_valid(
+                    raw_body, self.headers.get("X-VulnFlow-Signature")
+                ):
+                    self._send_json(401, {"error": "Invalid signature"})
+                    return
+                res = enqueue_run(validate_run_payload(json.loads(raw_body)))
+                self._send_json(202, res)
                 return
 
             # 3. Approve plan
             if path.startswith("/api/approvals/"):
+                if not mutation_authorized(
+                    {key.lower(): value for key, value in self.headers.items()}
+                ):
+                    self._send_json(401, {"error": "Unauthorized"})
+                    return
                 plan_id = path.strip("/").split("/")[-1]
                 try:
-                    request_model = ApprovalDecisionRequest.model_validate(body)
+                    request_model = ApprovalDecisionRequest.model_validate_json(raw_body)
                 except ValidationError as exc:
                     self._send_json(422, {"detail": exc.errors()})
                     return
-                res = submit_approval(
+                approval = submit_approval(
                     plan_id=plan_id,
                     approved=request_model.approved,
                     reviewer=request_model.reviewer,
                     reviewer_group=request_model.reviewer_group,
                     reason=request_model.reason,
-                    repo_path=request_model.repo_path,
+                    repo_path=validate_repo_path(request_model.repo_path),
                     resume=request_model.resume,
                 )
-                self._send_json(200, res)
+                self._send_json(200, approval)
                 return
 
             self._send_json(404, {"error": "Endpoint not found", "path": path})
 
+        except RunQueueFull as exc:
+            self._send_json(503, {"error": str(exc)})
+        except (ApiSecurityError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            self._send_json(422, {"error": str(exc)})
         except Exception as exc:
             logger.exception("Error handling POST %s: %s", path, exc)
             self._send_json(500, {"error": str(exc)})
@@ -223,7 +263,10 @@ class VulnFlowBuiltinHandler(http.server.BaseHTTPRequestHandler):
             return
 
         rel = path.lstrip("/")
-        target_file = dist / rel if rel else dist / "index.html"
+        target_file = (dist / rel if rel else dist / "index.html").resolve()
+        if not target_file.is_relative_to(dist.resolve()):
+            self._send_json(404, {"error": "Not found"})
+            return
 
         # If requesting a specific file that exists, serve it
         if target_file.is_file():

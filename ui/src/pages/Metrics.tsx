@@ -21,7 +21,7 @@ export const Metrics: React.FC = () => {
           <span>Remediation &amp; Governance Metrics</span>
         </h2>
         <p className="text-xs text-slate-500 mt-1">
-          Real-time telemetry measuring remediation velocity, policy compliance, and deduplication efficiency.
+          Example data for the metrics layout. Live evaluation metrics are unavailable.
         </p>
       </div>
 

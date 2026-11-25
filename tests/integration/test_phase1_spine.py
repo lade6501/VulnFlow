@@ -192,11 +192,12 @@ def test_f17_and_f18_npm_bump_and_sandbox() -> None:
         # Sandbox build and test
         runner = SandboxRunner()
         res = runner.execute_build_and_test(Path(tmpdir), ecosystem="npm")
-        assert res["build_clean"] is True
+        assert res["build_clean"] is False
+        assert res["verification_available"] is False
 
 
-def test_f19_pr_creation_and_idempotency() -> None:
-    """F19: Test PR creation, markdown body formatting, and idempotency."""
+def test_f19_pr_creation_requires_a_real_repository() -> None:
+    """F19: PR creation must never fabricate an opened pull request."""
     plan = PlannerAgent().plan_remediation(
         root_cause_id="npm:lodash",
         findings=[
@@ -219,18 +220,19 @@ def test_f19_pr_creation_and_idempotency() -> None:
     assert "lodash" in pr_body
     assert "4.17.21" in pr_body
 
-    # Test PR creation and rerun idempotency
+    # Without a repository/remote, the server can only produce a preview.
     pr_1 = git_server.pr_create("vulnflow/fix-lodash-test", pr_body, title="fix(deps): bump lodash")
-    assert pr_1["status"] == "opened"
+    assert pr_1["status"] == "preview"
+    assert pr_1["pr_url"] is None
     pr_2 = git_server.pr_create("vulnflow/fix-lodash-test", pr_body, title="fix(deps): bump lodash")
-    assert pr_1["pr_number"] == pr_2["pr_number"]  # Did not duplicate!
+    assert pr_2["status"] == "preview"
 
 
-def test_phase_1_gate_core_remediation_spine() -> None:
+def test_phase_1_gate_fails_closed_without_git_or_live_scanner() -> None:
     """
     PHASE 1 GATE TEST:
-    One approved patch bump produces a real PR on a sample repo
-    through the real policy server and the real LLM.
+    A mutation run must not claim completion when its git/scanner prerequisites
+    are absent.
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         sample_repo = Path(tmpdir)
@@ -256,9 +258,8 @@ def test_phase_1_gate_core_remediation_spine() -> None:
 
         final_state = run_workflow(state)
 
-        # 1. Gate check: terminal status completed cleanly
-        assert final_state.terminal_status == "completed"
-        assert final_state.exit_code == 0
+        assert final_state.terminal_status in {"error", "failed_verification"}
+        assert final_state.exit_code != 0
 
         # 2. Gate check: Real policy server approved the plan
         assert len(final_state.plans) == 1
@@ -267,26 +268,15 @@ def test_phase_1_gate_core_remediation_spine() -> None:
         assert plan.target_version == "4.17.21"
         assert plan.policy_result.status == "approved"
 
-        # 3. Gate check: package.json dependency was updated
+        # The failed git prerequisite prevents an untracked source mutation.
         with open(pkg_file, "r", encoding="utf-8") as f:
             data = json.load(f)
-        assert data["dependencies"]["lodash"] == "4.17.21"
-
-        # 4. Gate check: Real PR opened with formatted markdown body
-        assert len(final_state.pull_requests) == 1
-        pr = final_state.pull_requests[0]
-        assert pr["status"] == "opened"
-        assert "pr_url" in pr
-        assert "VulnFlow Automated Remediation" in pr["body"]
-
-        # 5. Gate check: Verification passed cleanly
-        assert len(final_state.verification_results) == 1
-        assert final_state.verification_results[0]["verified"] is True
-        assert final_state.verification_results[0]["rescan_clean"] is True
+        assert data["dependencies"]["lodash"] == "4.17.15"
+        assert final_state.pull_requests == []
 
 
-def test_f27_cli_commands_and_modes() -> None:
-    """F27 acceptance criteria: analyze, fix, verify, watch-expiry, report work with modes report, pr, dry-run; exit codes match skills.md."""
+def test_f27_cli_modes_fail_closed_when_mutation_prerequisites_are_missing() -> None:
+    """F27: assessment succeeds, while mutation requires a git checkout and scanner."""
     from vulnflow.cli import main
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -298,9 +288,10 @@ def test_f27_cli_commands_and_modes() -> None:
         exit_code = main(["report", "--repo", str(repo_dir), "--report", str(report_f), "--no-llm"])
         assert exit_code == 0
 
-        # 2. dry-run mode
+        # 2. A dry-run still patches/tests a branch, so this non-git directory
+        # must fail instead of reporting a synthetic successful verification.
         exit_code = main(["analyze", "--repo", str(repo_dir), "--report", str(report_f), "--mode", "dry-run", "--no-llm"])
-        assert exit_code == 0
+        assert exit_code != 0
 
         # 3. watch-expiry
         exit_code = main(["watch-expiry", "--repo", str(repo_dir), "--days", "30"])

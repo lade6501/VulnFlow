@@ -27,6 +27,7 @@ from vulnflow.orchestrator.routing import (
     route_after_plan,
     route_after_policy,
     route_after_test,
+    route_after_verify,
 )
 from vulnflow.observability.tracing import trace_span
 from vulnflow.observability.langsmith_tracer import langsmith_tracer
@@ -178,14 +179,12 @@ class VulnFlowWorkflow:
                     return state
 
                 # 7. Fix & Test loop
-                next_route = "pr"
                 while True:
                     state = self._run_node("fix", state)
                     state = self._run_node("test", state)
                     route = route_after_test(state)
 
-                    if route in ("pr", "verify"):
-                        next_route = route
+                    if route == "verify":
                         break
                     elif route == "fix":
                         logger.warning("Test failed; retrying fix iteration %d", state.retry_count)
@@ -199,13 +198,18 @@ class VulnFlowWorkflow:
                         )
                         return state
 
-                # 8. PR creation (dry-run routes directly to verification)
-                if next_route == "pr":
-                    state = self._run_node("pr", state)
-
-                # 9. Verification rescan
+                # 8. Verification rescan must complete before any remote PR side effect.
                 state = self._run_node("verify", state)
 
+                # 9. Create a PR only from verified branch evidence.
+                if route_after_verify(state) == "pr":
+                    state = self._run_node("pr", state)
+
+                findings_resolved = len({
+                    finding_id
+                    for result in state.verification_results if result.get("verified")
+                    for finding_id in result.get("resolved_finding_ids", [])
+                })
                 state.append_audit(
                     "RUN_COMPLETED",
                     "orchestrator",
@@ -213,7 +217,7 @@ class VulnFlowWorkflow:
                         "run_id": state.run_id,
                         "terminal_status": state.terminal_status,
                         "exit_code": state.exit_code,
-                        "findings_resolved": len(state.findings),
+                        "findings_resolved": findings_resolved,
                         "prs_opened": len(state.pull_requests),
                     },
                 )
@@ -224,7 +228,7 @@ class VulnFlowWorkflow:
                     outputs={
                         "terminal_status": state.terminal_status,
                         "exit_code": state.exit_code,
-                        "findings_resolved": len(state.findings),
+                        "findings_resolved": findings_resolved,
                         "prs_opened": len(state.pull_requests),
                     },
                     status=state.terminal_status,
@@ -333,10 +337,14 @@ def build_graph() -> Any:
         workflow.add_conditional_edges(
             "test",
             route_after_test,
-            {"pr": "pr", "verify": "verify", "fix": "fix", "exception": "exception"},
+            {"verify": "verify", "fix": "fix", "exception": "exception"},
         )
-        workflow.add_edge("pr", "verify")
-        workflow.add_edge("verify", END)
+        workflow.add_conditional_edges(
+            "verify",
+            route_after_verify,
+            {"pr": "pr", "end": END},
+        )
+        workflow.add_edge("pr", END)
         workflow.add_edge("exception", END)
 
         return workflow.compile()

@@ -389,8 +389,8 @@ Grounded context is supplied through dual RAG stores:
 All agent side effects and environment interactions occur over MCP:
 - `policy_check`, `policy_candidates` (Policy evaluation)
 - `advisory_search`, `graph_query` (Knowledge retrieval)
-- `scan_run`, `scan_diff` (Scanner execution and diffing)
-- `git_clone`, `git_branch`, `git_patch`, `git_commit`, `pr_create` (Sandboxed VCS operations)
+- `scan_run`, `scan_verify`, `scan_diff` (Scanner execution, revision evidence, and diffing)
+- `git_clone`, `git_branch`, `git_patch`, `git_commit`, `git_replace_text`, `pr_create` (VCS operations)
 - `build_test` (Sandboxed build and test execution)
 - `registry_check` (Internal package registry availability)
 - `ticket_create` (Issue tracker ticketing)

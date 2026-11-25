@@ -10,6 +10,8 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
+from pydantic import BaseModel, ConfigDict, Field
+
 
 class RemediationAction(str, enum.Enum):
     """Permitted remediation action types."""
@@ -32,6 +34,17 @@ class RiskTier(str, enum.Enum):
     BLOCKED = (
         "blocked"  # Prohibited by policy or safety constraints; escalate via ticket
     )
+
+
+class CodeRefactorProposal(BaseModel):
+    """Validated model proposal for one minimal source compatibility change."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    symbol: str = Field(min_length=1, max_length=300)
+    old_code: str = Field(min_length=1, max_length=8000)
+    new_code: str = Field(min_length=1, max_length=8000)
+    rationale: str = Field(min_length=1, max_length=2000)
 
 
 @dataclass
@@ -70,6 +83,8 @@ class VerificationResult:
     build_success: bool = True
     tests_passed: bool = True
     details: Optional[str] = None
+    revision: Optional[str] = None
+    scan_complete: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -85,6 +100,8 @@ class VerificationResult:
             build_success=bool(data.get("build_success", True)),
             tests_passed=bool(data.get("tests_passed", True)),
             details=data.get("details"),
+            revision=data.get("revision"),
+            scan_complete=bool(data.get("scan_complete", False)),
         )
 
 

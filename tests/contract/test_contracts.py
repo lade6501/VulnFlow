@@ -138,11 +138,11 @@ def test_stub_mcp_servers() -> None:
     assert test_res["build_clean"] is True
 
 
-def test_phase_0_gate_stubbed_run() -> None:
+def test_phase_0_gate_rejects_synthetic_mutation_success() -> None:
     """
     PHASE 0 GATE TEST:
-    A stubbed run goes from a sample scanner report to a fake PR through the orchestrator,
-    using only stub tools.
+    A mutation run over a fixture directory must stop when real git/scanner
+    prerequisites are unavailable; stub contracts cannot authorize side effects.
     """
     from vulnflow.agents.planner import default_planner_agent
     default_planner_agent.enable_llm = False
@@ -160,9 +160,9 @@ def test_phase_0_gate_stubbed_run() -> None:
 
     final_state = run_workflow(state)
 
-    # 1. Pipeline reached terminal success
-    assert final_state.terminal_status == "completed"
-    assert final_state.exit_code == 0
+    # 1. Pipeline fails closed before mutating an untracked fixture directory.
+    assert final_state.terminal_status == "error"
+    assert final_state.exit_code != 0
 
     # 2. Findings ingested and deduped
     assert len(final_state.findings) >= 1
@@ -179,23 +179,11 @@ def test_phase_0_gate_stubbed_run() -> None:
     assert plan.target_version == "4.17.21"
     assert len(final_state.approved_plans) >= 1
 
-    # 5. Patch applied and build tested
-    assert len(final_state.patches) >= 1
-    assert len(final_state.test_results) >= 1
-    assert final_state.test_results[0]["build_clean"] is True
-
-    # 6. Pull request opened
-    assert len(final_state.pull_requests) >= 1
-    pr = final_state.pull_requests[0]
-    assert pr["status"] == "opened"
-    assert "pr_url" in pr
-    assert "https://github.com" in pr["pr_url"]
-
-    # 7. Verification rescan completed cleanly
-    assert len(final_state.verification_results) >= 1
-    ver = final_state.verification_results[0]
-    assert ver["verified"] is True
-    assert ver["rescan_clean"] is True
+    # 5. No patch, verification, or PR may be fabricated.
+    assert final_state.patches == []
+    assert final_state.test_results == []
+    assert final_state.pull_requests == []
+    assert final_state.verification_results == []
 
     # 8. Audit trail recorded events
     assert len(final_state.audit_events) >= 8
@@ -205,10 +193,7 @@ def test_phase_0_gate_stubbed_run() -> None:
     assert "ROOTCAUSE_ANALYSIS_COMPLETED" in event_types
     assert "POLICY_EVALUATION_COMPLETED" in event_types
     assert "PLANS_GENERATED" in event_types
-    assert "PATCHES_APPLIED" in event_types
-    assert "BUILD_TEST_COMPLETED" in event_types
-    assert "PR_CREATED" in event_types
-    assert "VERIFICATION_COMPLETED" in event_types
+    assert "RUN_FAILED" in event_types
 
 
 def test_fastmcp_server_protocol() -> None:
@@ -224,10 +209,10 @@ def test_fastmcp_server_protocol() -> None:
 
     servers = [
         ("policy", policy_mcp, ["policy_check", "policy_candidates"]),
-        ("git", git_mcp, ["git_clone", "git_branch", "git_patch", "git_commit", "pr_create"]),
-        ("build", build_mcp, ["build_test"]),
+        ("git", git_mcp, ["git_clone", "git_branch", "git_patch", "git_commit", "git_replace_text", "pr_create"]),
+        ("build", build_mcp, ["build_test", "npm_update_lock"]),
         ("knowledge", knowledge_mcp, ["advisory_search", "graph_query", "root_cause", "blast_radius"]),
-        ("scan", scan_mcp, ["scan_run", "scan_diff"]),
+        ("scan", scan_mcp, ["scan_run", "scan_verify", "scan_diff"]),
         ("registry", registry_mcp, ["registry_check"]),
         ("ticket", ticket_mcp, ["ticket_create"]),
         ("notify", notify_mcp, ["approval_request", "notify_send"]),

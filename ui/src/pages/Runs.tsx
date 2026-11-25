@@ -23,15 +23,18 @@ export const Runs: React.FC = () => {
   const [filter, setFilter] = useState<'all' | 'completed' | 'pending' | 'blocked'>('all');
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [loadError, setLoadError] = useState(false);
   const [selectedRunReport, setSelectedRunReport] = useState<{ runId: string; markdown: string } | null>(null);
   const [reportLoading, setReportLoading] = useState<boolean>(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const loadData = async (isManual = false) => {
-    if (isManual) setRefreshing(true);
     try {
       const data = await fetchRuns();
       setRuns(data);
+      setLoadError(false);
+    } catch {
+      setLoadError(true);
     } finally {
       setLoading(false);
       if (isManual) setRefreshing(false);
@@ -39,10 +42,18 @@ export const Runs: React.FC = () => {
   };
 
   useEffect(() => {
-    loadData();
+    const initialLoad = setTimeout(loadData, 0);
     const interval = setInterval(() => loadData(false), 15000);
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(initialLoad);
+      clearInterval(interval);
+    };
   }, []);
+
+  const refreshRuns = () => {
+    setRefreshing(true);
+    void loadData(true);
+  };
 
   const handleCopyRunId = (runId: string) => {
     navigator.clipboard.writeText(runId);
@@ -78,6 +89,13 @@ export const Runs: React.FC = () => {
   }, [runs, filter]);
 
   const renderStatusPill = (run: RunSummary) => {
+    if (run.exit_code === null || run.terminal_status === 'queued' || run.terminal_status === 'running') {
+      return (
+        <span className="inline-flex px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">
+          {run.terminal_status === 'running' ? 'Running' : 'Queued'}
+        </span>
+      );
+    }
     if (run.exit_code === 0) {
       return (
         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80 whitespace-nowrap">
@@ -97,13 +115,16 @@ export const Runs: React.FC = () => {
     return (
       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-50 text-rose-800 border border-rose-200/80 whitespace-nowrap">
         <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
-        Policy Blocked
+        {run.exit_code === 20 ? 'Policy Blocked' : run.exit_code === 30 ? 'Verification Failed' : 'Failed'}
       </span>
     );
   };
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
+      {loadError && (
+        <p role="alert" className="text-xs text-rose-800">Could not refresh runs. Check the API connection.</p>
+      )}
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -116,7 +137,7 @@ export const Runs: React.FC = () => {
         </div>
 
         <button
-          onClick={() => loadData(true)}
+          onClick={refreshRuns}
           className="self-start sm:self-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white text-slate-700 border border-slate-200 shadow-2xs hover:bg-slate-50 transition-colors cursor-pointer"
         >
           <IconRefresh className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin text-sky-600' : 'text-slate-400'}`} />

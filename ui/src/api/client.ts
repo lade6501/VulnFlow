@@ -6,7 +6,7 @@ Frontend HTTP client for communicating with VulnFlow FastAPI endpoints.
 export interface RunSummary {
   run_id: string;
   terminal_status: string;
-  exit_code: number;
+  exit_code: number | null;
   repo_path?: string;
   mode?: string;
   findings_count: number;
@@ -35,61 +35,11 @@ export interface PlanItem {
 const API_BASE = import.meta.env?.VITE_API_BASE_URL || 'http://localhost:8000';
 
 export async function fetchRuns(limit: number = 50): Promise<RunSummary[]> {
-  try {
-    const res = await fetch(`${API_BASE}/api/runs?limit=${limit}`);
-    if (res.ok) {
-      const data = await res.json();
-      return data.runs || [];
-    }
-  } catch (err) {
-    console.warn('API unavailable, returning local runs state', err);
-  }
-
-  // Graceful fallback data when backend is not running
-  return [
-    {
-      run_id: 'RUN-a19e83b0f142',
-      terminal_status: 'completed',
-      exit_code: 0,
-      repo_path: 'workspace/payment-service',
-      mode: 'pr',
-      findings_count: 3,
-      plans_count: 1,
-      approved_count: 1,
-      pending_count: 0,
-      prs_count: 1,
-      prs: [{ title: 'fix(deps): bump lodash to 4.17.21', branch: 'vulnflow/fix-lodash', pr_url: 'https://github.com/corp/payment/pull/42', status: 'opened' }],
-      created_at: Date.now() - 3600000,
-    },
-    {
-      run_id: 'RUN-b47c229e01df',
-      terminal_status: 'pending_approval',
-      exit_code: 10,
-      repo_path: 'workspace/auth-gateway',
-      mode: 'pr',
-      findings_count: 2,
-      plans_count: 1,
-      approved_count: 0,
-      pending_count: 1,
-      prs_count: 0,
-      blocking_reason: '1 plan(s) require human authorization: target package not on corporate approved whitelist.',
-      created_at: Date.now() - 7200000,
-    },
-    {
-      run_id: 'RUN-c88f9104e5aa',
-      terminal_status: 'blocked_policy',
-      exit_code: 20,
-      repo_path: 'workspace/user-profile',
-      mode: 'pr',
-      findings_count: 1,
-      plans_count: 0,
-      approved_count: 0,
-      pending_count: 0,
-      prs_count: 0,
-      blocking_reason: 'Package left-pad is banned by organizational security policy.',
-      created_at: Date.now() - 14400000,
-    },
-  ];
+  const res = await fetch(`${API_BASE}/api/runs?limit=${limit}`);
+  if (!res.ok) throw new Error(`Runs request failed (${res.status})`);
+  const data = await res.json();
+  if (!Array.isArray(data.runs)) throw new Error('Invalid run list');
+  return data.runs;
 }
 
 export async function fetchRunReport(runId: string): Promise<string> {
@@ -142,12 +92,16 @@ export async function submitPlanApproval(
   reviewer: string = 'security-lead',
   reason: string = 'Authorized by security committee',
   reviewerGroup: string = 'security',
-  repoPath?: string
-): Promise<{ ok: boolean; status: string }> {
+  repoPath?: string,
+  apiToken?: string
+): Promise<{ ok: boolean; status: string; terminalStatus?: string }> {
   try {
     const res = await fetch(`${API_BASE}/api/approvals/${planId}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {}),
+      },
       body: JSON.stringify({
         approved,
         reviewer,
@@ -158,25 +112,24 @@ export async function submitPlanApproval(
       }),
     });
     const data = res.ok ? await res.json() : {};
-    return { ok: res.ok, status: data.status || (approved ? 'approved' : 'rejected') };
+    return {
+      ok: res.ok,
+      status: data.status || (res.status === 401 ? 'unauthorized' : 'error'),
+      terminalStatus: data.terminal_status,
+    };
   } catch (err) {
     console.warn('API call failed, operating in mock mode', err);
     return { ok: false, status: 'error' };
   }
 }
 
-export async function fetchGraphData(pkg: string = 'npm:lodash'): Promise<any> {
-  try {
-    const res = await fetch(`${API_BASE}/api/graph?package=${encodeURIComponent(pkg)}`);
-    if (res.ok) {
-      return await res.json();
-    }
-  } catch (err) {
-    console.warn('API call failed for graph data', err);
-  }
-  return {
-    package: pkg,
-    root_cause: { root_cause_package: 'my-frontend-lib', is_direct: false },
-    blast_radius: { affected_services: ['payment-service', 'auth-gateway', 'web-frontend'] },
-  };
+export interface GraphData {
+  root_cause: { root_cause_package: string; dependency_chain: string[] };
+  blast_radius: { affected_services: string[] };
+}
+
+export async function fetchGraphData(pkg: string, signal: AbortSignal): Promise<GraphData> {
+  const res = await fetch(`${API_BASE}/api/graph?package=${encodeURIComponent(pkg)}`, { signal });
+  if (!res.ok) throw new Error(`Graph request failed (${res.status})`);
+  return res.json();
 }

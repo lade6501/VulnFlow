@@ -133,6 +133,19 @@ GITHUB_TOKEN="ghp_..."
 
 ## 💻 Usage & CLI Reference
 
+Remediation verification requires a committed Git branch, Trivy, and a locally installed Docker
+image configured through `VULNFLOW_BUILD_SANDBOX_IMAGE`. The image needs the ecosystem's build
+tools and offline dependencies. For npm, a compatible committed lockfile is required and the
+image can seed the install with a cache at `/opt/npm-cache`. Maven uses an offline repository at
+`/opt/maven-repo`. The build container has no network access. A PR requires matching test and
+scan evidence for the commit that will be pushed, plus a GitHub origin and credentials.
+
+To verify a branch directly, pass its pre-remediation report:
+
+```bash
+vulnflow verify --repo /path/to/repo --branch my-fix --report /path/to/baseline.json
+```
+
 VulnFlow can be executed directly as `vulnflow` (after running `./run.sh install` or `.\run.ps1 install`), or via the universal launchers:
 - **macOS / Linux**: `./run.sh <command> [options]`
 - **Windows PowerShell**: `.\run.ps1 <command> [options]`
@@ -332,7 +345,18 @@ See [`mcp_config.example.json`](file:///Users/vishal/Documents/VulnFlow/vulnflow
 
 ## 🖥️ Web Dashboard (UI)
 
+Set `VULNFLOW_API_TOKEN` to authorize run creation and plan decisions. Enter it in the approval
+page when recording a decision. If the dashboard displays an organization repository slug, enter
+the local repository path from the server. The webhook endpoint requires
+`X-VulnFlow-Signature: sha256=<hex HMAC>` computed over the exact request body with
+`VULNFLOW_WEBHOOK_SECRET`. Run creation and webhooks return an accepted run ID for polling. Set
+`VULNFLOW_ALLOWED_REPO_ROOTS` to the server directories allowed to supply repositories and reports
+using the platform path separator. Use `VULNFLOW_CORS_ORIGINS` for a comma-separated browser origin
+allowlist. See [ADR 0002](docs/adr/0002-remediation-evidence.md) for queue and identity limits.
+
 VulnFlow includes a modern React + TypeScript dashboard to visualize runs, approval queues, and dependency graphs:
+
+Use Node 22.13 or newer on the Node 22 release line for local dashboard builds.
 
 ```bash
 cd ui
