@@ -5,11 +5,16 @@ Explains enterprise report generation, evidence rules, extension, and troublesho
 
 # Enterprise run reporting
 
-F43 emits three files from one immutable `RunReport` v1 snapshot:
+F43 renders these files from one immutable `RunReport` v1 snapshot:
 
 - `run-report.json`: canonical machine-readable evidence and provenance.
-- `report.html`: self-contained accessible report with inline CSS and no JavaScript.
-- `report.md`: bounded reviewer summary linking to the HTML evidence report.
+- `report.html`: executive summary with run status, approvals, verification, and strategic decisions.
+  The final section lists redacted credential locations when the run detects exposures.
+- `technical-report.html`: expandable component-level evidence, policy results, and audit details.
+- `report.md`: bounded reviewer summary with approvals near the top and links to the HTML evidence.
+
+Both HTML reports work offline. They use inline styles and icons, native accordions, keyboard-accessible
+tables, and respect the viewer's reduced-motion setting.
 
 The default directory is `./vulnflow-report/<run-id>/`. Select formats with
 `--output-format html,md,json` and change the root with `--out-dir PATH`. The scanner input remains
@@ -38,8 +43,8 @@ summary, impact or migration prose and must carry source references before it is
 ## Security controls
 
 Report-boundary redaction removes common credential and PII forms. HTML escapes all untrusted data,
-uses a restrictive Content Security Policy and permits links only for validated HTTP(S) advisory
-sources. PR and trace values are text. Markdown neutralizes mentions and syntax so scanner text
+uses a restrictive Content Security Policy and checks advisory and PR URLs for HTTP(S). Trace values
+are rendered as text. Markdown neutralizes mentions and syntax so scanner text
 cannot create headings, links or instructions. All writes are atomic, and renderer failure leaves the
 workflow exit code unchanged.
 

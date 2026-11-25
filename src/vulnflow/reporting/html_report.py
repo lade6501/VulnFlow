@@ -12,6 +12,7 @@ import os
 import tempfile
 from collections.abc import Iterable
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from vulnflow.contracts.report import RunReport
 from vulnflow.contracts.state import VulnFlowState
@@ -37,6 +38,137 @@ def _list(items: Iterable[object], empty: str = "None recorded.") -> str:
     return "<ul>" + "".join(f"<li>{_escape(item)}</li>" for item in values) + "</ul>"
 
 
+_ICONS = {
+    "shield": '<path d="M12 22s7-3 7-9V5l-7-3-7 3v8c0 6 7 9 7 9z"/><path d="m9 12 2 2 4-4"/>',
+    "chart": '<path d="M3 3v18h18M8 16v-3m5 3V9m5 7V5"/>',
+    "action": '<path d="M9 5h10a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-6"/><path d="m3 7 2 2 4-5m1 9h6m-6 4h6"/>',
+    "branch": '<circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M6 8v8m12-8c0 5-4 7-10 7"/>',
+    "file": '<path d="M6 3h8l4 4v14H6zM14 3v5h5M9 13h6m-6 4h6"/>',
+    "warning": '<path d="m12 3 10 17H2L12 3zm0 6v4m0 3v1"/>',
+    "arrow": '<path d="M5 12h14m-6-6 6 6-6 6"/>',
+}
+
+
+def _icon(name: str) -> str:
+    return (
+        '<svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" '
+        'fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" '
+        f'stroke-linejoin="round">{_ICONS[name]}</svg>'
+    )
+
+
+def _label(value: object) -> str:
+    if value is None:
+        return "Unknown"
+    label = str(value).replace("_", " ")
+    return label[:1].upper() + label[1:]
+
+
+def _badge(value: object, tone: str | None = None) -> str:
+    if tone is None:
+        code = str(value).lower()
+        if code in {"auto", "approved", "completed", "executed", "opened", "verified"}:
+            tone = "auto"
+        elif code in {"high", "pending", "pending_approval", "review", "simulated"}:
+            tone = "review"
+        elif code in {"blocked", "blocked_policy", "critical", "error", "failed", "failed_verification", "rejected"}:
+            tone = "secret"
+        else:
+            tone = "neutral"
+    return f'<span class="badge badge-{tone}">{_escape(_label(value))}</span>'
+
+
+def _section(anchor: str, title: str, icon: str, body: str, css_class: str = "") -> str:
+    css = f' class="{css_class}"' if css_class else ""
+    return (
+        f'<section id="{anchor}"{css}><h2><span class="section-icon">{_icon(icon)}</span>'
+        f'{_escape(title)}</h2>{body}</section>'
+    )
+
+
+def _table(label: str, columns: tuple[str, ...], rows: str, empty: str) -> str:
+    headings = "".join(f'<th scope="col">{_escape(name)}</th>' for name in columns)
+    if not rows:
+        rows = f'<tr><td colspan="{len(columns)}">{_escape(empty)}</td></tr>'
+    return (
+        f'<div class="table-wrap" role="region" aria-label="{_escape(label)}" tabindex="0">'
+        f"<table><thead><tr>{headings}</tr></thead><tbody>{rows}</tbody></table></div>"
+    )
+
+
+def _external_link(url: str | None, label: str) -> str:
+    try:
+        # Render URLs defensively even when called with an already-built snapshot.
+        parsed = urlsplit(url or "")
+        if (
+            url
+            and parsed.scheme in {"http", "https"}
+            and parsed.hostname
+            and parsed.username is None
+            and not any(char.isspace() or ord(char) < 32 for char in url)
+        ):
+            return f'<a href="{_escape(url)}" rel="noopener noreferrer">{_escape(label)}</a>'
+    except ValueError:
+        pass
+    return _escape(label)
+
+
+def _header(
+    report: RunReport,
+    title: str,
+    view: str,
+    links: Iterable[tuple[str, str]],
+    alternate: tuple[str, str],
+) -> str:
+    header = report.header
+    nav = "".join(f'<a href="#{anchor}">{_escape(label)}</a>' for anchor, label in links)
+    alternate_path, alternate_label = alternate
+    return (
+        '<header class="report-header"><div>'
+        f'<p class="eyebrow">{_icon("shield")} VulnFlow · {_escape(view)}</p>'
+        f'<h1>{_escape(title)}</h1><p class="hero-meta"><strong>{_escape(header.repository_name)}</strong>'
+        f'<code>{_escape(header.run_id)}</code></p></div>'
+        f'<div class="outcome"><span class="outcome-label">Run outcome</span>{_badge(header.outcome)}</div></header>'
+        f'<nav class="report-nav" aria-label="Report sections">{nav}'
+        f'<a class="switch-link" href="{alternate_path}">{_escape(alternate_label)} '
+        f'{_icon("arrow")}</a></nav>'
+    )
+
+
+def _metrics(report: RunReport) -> str:
+    summary = report.executive_summary
+    values = (
+        ("Findings", summary.findings_analyzed),
+        ("Root causes", summary.root_causes_identified),
+        ("Expected CVEs", summary.expected_cves_addressed),
+        ("Verified CVEs", summary.verified_cves_resolved),
+        ("Applied fixes", summary.fixes_applied),
+        ("Created PRs", summary.prs_actually_created),
+    )
+    return '<div class="metrics">' + "".join(
+        f"<div><strong>{_escape(value)}</strong><span>{label}</span></div>" for label, value in values
+    ) + "</div>"
+
+
+def _verification(report: RunReport) -> str:
+    evidence = report.execution_evidence
+    checks = (
+        ("Patch", evidence.patch.value),
+        ("Build and tests", evidence.tests.value),
+        ("Pull request", evidence.pull_request.value),
+        ("Post-fix rescan", evidence.rescan.value),
+    )
+    return '<div class="verification-grid">' + "".join(
+        f'<div><span class="verification-label">{label}</span>{_badge(value)}</div>'
+        for label, value in checks
+    ) + "</div>"
+
+
+def _render_page(title: str, body: str) -> str:
+    template = (Path(__file__).parent / "templates" / "report.html").read_text(encoding="utf-8")
+    return template.replace("{{REPORT_TITLE}}", _escape(title)).replace("{{REPORT_CONTENT}}", body)
+
+
 def _severity_svg(report: RunReport, title_text: str = "Vulnerability severity before remediation") -> str:
     before = report.executive_summary.severity_counts_before
     after = report.executive_summary.severity_counts_after
@@ -46,17 +178,18 @@ def _severity_svg(report: RunReport, title_text: str = "Vulnerability severity b
     labels = ["Critical", "High", "Medium", "Low", "Info"]
     bars = []
     for index, (label, value, color) in enumerate(zip(labels, values, colors, strict=False)):
-        width = int(((value or 0) / maximum) * 210)
+        width = int(((value or 0) / maximum) * 246)
         y = 20 + index * 34
+        count = _escape(_count(value))
         bars.append(
             f'<text x="0" y="{y + 14}" class="chart-label">{label}</text>'
             f'<rect x="72" y="{y}" width="{width}" height="18" fill="{color}" '
-            f'data-count="{value or 0}" rx="2" />'
-            f'<text x="{78 + width}" y="{y + 14}" class="chart-value">{value or 0}</text>'
+            f'data-count="{count}" rx="2" />'
+            f'<text x="{78 + width}" y="{y + 14}" class="chart-value">{count}</text>'
         )
     after_text = "Pending post-fix rescan" if after.total is None else str(after.total)
     return (
-        '<figure><svg viewBox="0 0 360 200" role="img" '
+        '<figure><svg viewBox="0 0 370 190" role="img" '
         'aria-labelledby="severity-title severity-desc">'
         f'<title id="severity-title">{_escape(title_text)}</title>'
         f'<desc id="severity-desc">After-state total is {_escape(after_text)}.</desc>'
@@ -92,333 +225,319 @@ def _atomic_write_file(path: Path, content: str) -> None:
         raise
 
 
+def _accordion(title: str, body: str, *, meta: str = "", css_class: str = "") -> str:
+    css = f' class="{css_class}"' if css_class else ""
+    return (
+        f'<details{css}><summary><span class="accordion-title">{_escape(title)}</span>'
+        f"{meta}</summary><div class=\"details-body\">{body}</div></details>"
+    )
+
+
 def _root_sections(report: RunReport) -> str:
-    """Render collapsible root-cause details for the technical report."""
+    """Render compact component headings with expandable evidence."""
     sections = []
     for root in report.root_causes:
-        advisory_rows = []
-        for evidence in root.advisory_evidence:
-            title = _escape(evidence.title or evidence.evidence_id)
-            if evidence.source_url:
-                title = f'<a href="{_escape(evidence.source_url)}" rel="noopener noreferrer">{title}</a>'
-            advisory_rows.append(
-                "<tr>"
-                f"<td>{title}</td><td>{_escape(', '.join(evidence.cves) or 'UNKNOWN')}</td>"
-                f"<td>{'Validated' if evidence.validated else 'Rejected'}</td>"
-                f"<td>{_escape(evidence.rejection_reason or 'Evidence matched.')}</td></tr>"
-            )
+        advisory_rows = "".join(
+            "<tr>"
+            f"<td>{_external_link(item.source_url, item.title or item.evidence_id)}</td>"
+            f"<td>{_escape(', '.join(item.cves) or 'Unknown')}</td>"
+            f"<td>{_badge('validated', 'auto') if item.validated else _badge('rejected')}</td>"
+            f"<td>{_escape(item.rejection_reason or 'Evidence matched.')}</td></tr>"
+            for item in root.advisory_evidence
+        )
         insight_items = "".join(
             '<article class="insight">'
-            f"<h4>{_escape(insight.category)}</h4><p>{_escape(insight.text)}</p>"
-            f'<p class="meta">Generated by: {_escape(insight.generated_by.value)}; '
-            f"evidence: {_escape(insight.evidence_availability.value)}; sources: "
-            f"{_escape(', '.join(insight.source_references) or 'UNKNOWN')}</p></article>"
+            f"<h4>{_escape(_label(insight.category))}</h4>"
+            f'<p class="evidence-text">{_escape(insight.text)}</p>'
+            f'<p class="meta">Generated by {_escape(_label(insight.generated_by.value))} · '
+            f"Evidence {_escape(_label(insight.evidence_availability.value))} · "
+            f"{_escape(', '.join(insight.source_references) or 'Unknown source')}</p></article>"
             for insight in root.insights
         )
-        options = "".join(
-            f"<tr><td>{_escape(option.action)}</td><td>{_escape(option.target_version)}</td>"
-            f"<td>{'Accepted' if option.accepted else 'Rejected'}</td>"
-            f"<td>{_escape(option.reason)}</td></tr>"
+        option_rows = "".join(
+            f"<tr><td>{_escape(_label(option.action))}</td><td>{_escape(option.target_version)}</td>"
+            f"<td>{_badge('accepted', 'auto') if option.accepted else _badge('rejected')}</td>"
+            f"<td class=\"evidence-text\">{_escape(option.reason)}</td></tr>"
             for option in root.options_considered
         )
         file_rows = "".join(
-            f"<tr><td>{_escape(change.path)}</td><td>{_escape(change.state.value)}</td>"
+            f"<tr><td><code>{_escape(change.path)}</code></td><td>{_badge(change.state.value)}</td>"
             f"<td>{_escape(change.lines_added)}</td><td>{_escape(change.lines_removed)}</td></tr>"
             for change in root.modified_files
         )
         verify_rows = "".join(
-            f"<tr><td>{_escape(item.check)}</td><td>{_escape(item.state.value)}</td>"
+            f"<tr><td>{_escape(_label(item.check))}</td><td>{_badge(item.state.value)}</td>"
             f"<td>{_escape(item.passed)}</td><td>{_escape(item.details)}</td></tr>"
             for item in root.verification_results
         )
-        insight_body = insight_items or '<p class="muted">NOT_EVALUATED</p>'
-        advisory_body = "".join(advisory_rows) or '<tr><td colspan="4">UNKNOWN</td></tr>'
-        options_body = options or '<tr><td colspan="4">NOT_EVALUATED</td></tr>'
-        files_body = file_rows or '<tr><td colspan="4">No executed change.</td></tr>'
-        # Collapsed by default: no open attribute so 43 root causes don't blow up the page
-        sections.append(
-            f"<details><summary>{_escape(root.package)} — {_escape(root.risk_tier)}</summary>"
-            '<div class="details-body">'
-            f"<p>{_escape(root.impact_explanation)}</p><dl>"
-            f"<dt>Origin</dt><dd>{_escape(root.origin.value)}</dd>"
-            f"<dt>Installed / target</dt><dd>{_escape(root.installed_version)} / {_escape(root.target_version)}</dd>"
-            f"<dt>Dependency chain</dt><dd>{_escape(' → '.join(root.dependency_chain) or 'UNKNOWN')}</dd>"
-            f"<dt>CVEs</dt><dd>{_escape(', '.join(root.associated_cves) or 'UNKNOWN')}</dd>"
-            f"<dt>Risk reason</dt><dd>{_escape(root.risk_reason)}</dd></dl>"
-            f"<h3>AI security intelligence</h3>{insight_body}"
-            '<h3>Advisory evidence</h3><div class="table-wrap"><table><thead><tr>'
-            "<th>Source</th><th>CVEs</th><th>Validation</th><th>Reason</th></tr></thead>"
-            f"<tbody>{advisory_body}</tbody></table></div>"
-            '<h3>Remediation alternatives and decisions</h3><div class="table-wrap"><table><thead><tr>'
-            "<th>Action</th><th>Target</th><th>Decision</th><th>Reason</th></tr></thead>"
-            f"<tbody>{options_body}</tbody></table></div>"
-            f"<h3>Recommended and actual changes</h3><p>{_escape(root.recommended_change)}</p>"
-            '<div class="table-wrap"><table><thead><tr><th>File</th><th>State</th><th>Added</th><th>Removed</th></tr></thead>'
-            f"<tbody>{files_body}</tbody></table></div>"
-            f"<h3>Compatibility and migration impact</h3><p>{_escape(root.breaking_change_notes or 'No breaking changes detected.')}</p>"
-            f"<p>{_escape(root.migration_notes or 'Standard semantic update.')}</p>"
-            '<h3>Verification results and evidence</h3><div class="table-wrap"><table><thead><tr>'
-            "<th>Check</th><th>State</th><th>Passed</th><th>Evidence</th></tr></thead>"
-            f"<tbody>{verify_rows}</tbody></table></div>"
-            f"<h3>Developer action plan</h3>{_list(root.remaining_developer_actions)}</div></details>"
+        advisory_table = _table(
+            "Advisory evidence", ("Source", "CVEs", "Validation", "Reason"),
+            advisory_rows, "No advisory evidence recorded.",
         )
-    return "".join(sections) or '<p class="muted">No root causes were persisted.</p>'
+        options_table = _table(
+            "Remediation alternatives", ("Action", "Target", "Decision", "Reason"),
+            option_rows, "No alternatives recorded.",
+        )
+        files_table = _table(
+            "Modified files", ("File", "State", "Added", "Removed"),
+            file_rows, "No executed change.",
+        )
+        verification_table = _table(
+            "Component verification", ("Check", "State", "Passed", "Evidence"),
+            verify_rows, "No verification checks recorded.",
+        )
+
+        body = (
+            f'<p class="evidence-text">{_escape(root.impact_explanation)}</p><dl>'
+            f"<dt>Origin</dt><dd>{_escape(_label(root.origin.value))}</dd>"
+            f"<dt>Installed and target</dt><dd>{_escape(root.installed_version)} → {_escape(root.target_version)}</dd>"
+            f"<dt>Dependency chain</dt><dd>{_escape(' → '.join(root.dependency_chain) or 'Unknown')}</dd>"
+            f"<dt>CVEs</dt><dd>{_escape(', '.join(root.associated_cves) or 'Unknown')}</dd>"
+            f"<dt>Risk reason</dt><dd>{_escape(root.risk_reason)}</dd></dl>"
+            f"<h3>Recommended change</h3><p>{_escape(root.recommended_change)}</p>"
+            + _accordion("AI security intelligence", insight_items or '<p class="muted">Not evaluated.</p>')
+            + _accordion("Advisory evidence and alternatives", advisory_table + "<h3>Alternatives</h3>" + options_table)
+            + _accordion("Changes and verification", "<h3>Modified files</h3>" + files_table
+                         + "<h3>Verification results</h3>" + verification_table)
+            + _accordion(
+                "Compatibility and developer actions",
+                f'<p class="evidence-text">{_escape(root.breaking_change_notes or "No compatibility assessment recorded.")}</p>'
+                f'<p class="evidence-text">{_escape(root.migration_notes or "No migration notes recorded.")}</p>'
+                f"<h3>Developer action plan</h3>{_list(root.remaining_developer_actions)}",
+            )
+        )
+        meta = (
+            f'<span class="accordion-tools"><span class="accordion-meta">{len(root.associated_cves)} CVEs</span>'
+            f'{_badge(root.risk_tier)}</span>'
+        )
+        sections.append(_accordion(root.package, body, meta=meta, css_class="root-accordion"))
+    return "".join(sections) or '<p class="muted">No root causes were recorded.</p>'
+
+
+def _actions_section(report: RunReport) -> str:
+    rows = "".join(
+        f"<tr><td>{_badge(item.priority)}</td><td>{_escape(_label(item.action_type))}</td>"
+        f"<td>{_escape(item.description)}</td><td>{_escape(_label(item.required_actor))}</td>"
+        f"<td>{_badge(item.completion_status.value)}</td></tr>"
+        for item in report.action_required
+    )
+    table = _table(
+        "Immediate actions", ("Priority", "Action", "Description", "Actor", "Status"),
+        rows, "No immediate action recorded.",
+    )
+    if len(report.action_required) > 8:
+        table = _accordion(f"View all {len(report.action_required)} recorded actions", table)
+    return _section("actions", "Immediate actions required", "action", table)
+
+
+def _patch_section(report: RunReport) -> str:
+    if not report.applied_patches:
+        return ""
+    rows = "".join(
+        f"<tr><td><strong>{_escape(p.target_package)}</strong></td><td><code>{_escape(p.file_path)}</code></td>"
+        f"<td>{_badge(p.status)}</td><td>+{_count(p.lines_added)} / -{_count(p.lines_removed)}</td></tr>"
+        for p in report.applied_patches
+    )
+    return _section(
+        "patches", "Applied Remediation Patches", "file",
+        _table("Applied patches", ("Package", "File", "Status", "Lines (+/-)"), rows, "No changes recorded."),
+    )
+
+
+def _prs_section(report: RunReport) -> str:
+    if not report.pull_requests:
+        return ""
+    rows = "".join(
+        f"<tr><td>#{pr.pr_number or 'N/A'}</td><td>{_external_link(pr.pr_url, pr.title or 'Remediation PR')}</td>"
+        f"<td><code>{_escape(pr.branch)}</code></td><td>{_escape(', '.join(pr.affected_packages))}</td>"
+        f"<td>{_badge(pr.status)}</td></tr>"
+        for pr in report.pull_requests
+    )
+    return _section(
+        "pull-requests", "Created Pull Requests", "branch",
+        _table("Pull requests", ("PR #", "Title", "Branch", "Packages", "Status"), rows, "None recorded."),
+    )
+
+
+def _approval_section(report: RunReport) -> str:
+    if not report.approval_groups:
+        return ""
+    rows = "".join(
+        f"<tr><td><strong>{_escape(group.title)}</strong></td><td>{group.plans_count}</td>"
+        f"<td>{_escape(group.description)}</td><td>{_escape(group.recommended_action)}</td>"
+        f"<td><code>{_escape(group.cli_command)}</code></td></tr>"
+        for group in report.approval_groups
+    )
+    return _section(
+        "approvals", "Prioritized Approval Groups", "action",
+        _table("Approval groups", ("Group", "Plans", "Description", "Action", "CLI command"), rows, "None recorded."),
+    )
+
+
+def _campaigns_section(report: RunReport) -> str:
+    if not report.remediation_campaigns:
+        return ""
+    rows = "".join(
+        f"<tr><td><code>{_escape(c.campaign_id)}</code></td><td>{_escape(c.title)}</td>"
+        f"<td><code>{_escape(c.branch)}</code></td><td>{c.plans_count}</td><td>{_badge(c.status)}</td></tr>"
+        for c in report.remediation_campaigns
+    )
+    return _section(
+        "campaigns", "Remediation Campaigns", "branch",
+        _table("Campaigns", ("Campaign ID", "Title", "Branch", "Plans", "Status"), rows, "None recorded."),
+    )
+
+
+def _provenance(report: RunReport) -> str:
+    header = report.header
+    return _accordion(
+        "View execution details and provenance",
+        f'<dl class="meta-grid"><dt>Generated</dt><dd>{_escape(header.generated_at.isoformat())}</dd>'
+        f"<dt>Mode</dt><dd>{_escape(_label(header.execution_mode.value))}</dd>"
+        f"<dt>Exit code</dt><dd>{header.exit_code}</dd>"
+        f"<dt>Repository changes</dt><dd>{_escape(_label(header.repo_changes.value))}</dd>"
+        f"<dt>Scanner input</dt><dd>{_escape(report.provenance.input_scanner_file_sha256 or 'No file digest recorded')}</dd>"
+        f"<dt>Audit chain head</dt><dd>{_escape(report.provenance.audit_chain_head_hash)}</dd>"
+        f"<dt>Model and provider</dt><dd>{_escape(report.provenance.model)} / {_escape(report.provenance.model_provider)}</dd>"
+        f"<dt>Trace reference</dt><dd>{_escape(report.provenance.trace_reference)}</dd></dl>",
+    )
+
+
+def _exposure_section(report: RunReport) -> str:
+    if not report.secrets_exposure:
+        return ""
+    rows = "".join(
+        f"<tr><td>{_badge(item.secret_type, 'secret')}</td><td><code>{_escape(item.file_path)}</code></td>"
+        f"<td>{_escape(item.line_number)}</td><td>{_escape(item.action_required)}</td>"
+        f"<td>{_badge(item.status)}</td></tr>"
+        for item in report.secrets_exposure
+    )
+    table = _table(
+        "Redacted credential locations", ("Type", "File", "Line", "Required action", "Status"),
+        rows, "No locations recorded.",
+    )
+    count = len(report.secrets_exposure)
+    location_label = "location" if count == 1 else "locations"
+    return _section(
+        "credential-exposure", "Credentials & Secret Exposure Alert", "warning",
+        '<p class="lead">Review the redacted locations and follow the required rotation or removal action for each finding.</p>'
+        + _accordion(f"View {count} flagged {location_label}", table),
+        css_class="exposure-alert",
+    )
+
+
+def _decisions_section(report: RunReport) -> str:
+    if not report.strategic_decisions:
+        return ""
+    cards = []
+    for decision in report.strategic_decisions:
+        category = _label(decision.category)
+        tone = "secret" if "secret" in decision.category.lower() else "neutral"
+        body = (
+            '<dl class="decision-grid">'
+            f'<dt>Finding</dt><dd class="evidence-text">{_escape(decision.finding)}</dd>'
+            f'<dt>Impact</dt><dd class="evidence-text">{_escape(decision.impact)}</dd>'
+            f'<dt>Recommendation</dt><dd class="evidence-text">{_escape(decision.recommendation)}</dd>'
+            f"<dt>Action taken</dt><dd>{_escape(decision.action_taken)}</dd>"
+            f"<dt>Human decision</dt><dd>{_escape(decision.human_decision)}</dd>"
+            f'<dt>Evidence</dt><dd class="evidence-text">{_escape(decision.evidence_summary)}</dd></dl>'
+        )
+        cards.append(_accordion(
+            decision.title, body,
+            meta=f'<span class="accordion-tools">{_badge(category, tone)}</span>',
+        ))
+    return _section("decisions", "Top Strategic AI Decisions & Risk Governance", "shield", "".join(cards))
 
 
 def generate_executive_html_report(report: RunReport | VulnFlowState) -> str:
-    """Render concise 1-2 page executive security intelligence brief for leadership and CISOs."""
+    """Render a concise security and approvals brief."""
     snapshot = _canonical(report)
-    summary = snapshot.executive_summary
-
-    actions = "".join(
-        f"<tr><td><span class=\"badge {'badge-review' if item.priority == 'high' else 'badge-auto'}\">{_escape(item.priority)}</span></td>"
-        f"<td>{_escape(item.action_type)}</td>"
-        f"<td>{_escape(item.description)}</td><td>{_escape(item.required_actor)}</td>"
-        f"<td>{_escape(item.completion_status.value)}</td></tr>"
-        for item in snapshot.action_required
-    )
-
-    prs_section = ""
-    if snapshot.pull_requests:
-        pr_rows = "".join(
-            f'<tr><td>#{pr.pr_number or "N/A"}</td><td><a href="{_escape(pr.pr_url)}">{_escape(pr.title or "Remediation PR")}</a></td>'
-            f"<td><code>{_escape(pr.branch)}</code></td><td>{_escape(', '.join(pr.affected_packages))}</td>"
-            f'<td><span class="badge badge-auto">{_escape(pr.status)}</span></td></tr>'
-            for pr in snapshot.pull_requests
-        )
-        prs_section = (
-            '<section><h2>Created Pull Requests</h2>'
-            '<div class="table-wrap"><table><thead><tr><th>PR #</th><th>Title</th><th>Branch</th><th>Packages</th><th>Status</th></tr></thead>'
-            f"<tbody>{pr_rows}</tbody></table></div></section>"
-        )
-
-    patches_section = ""
-    if snapshot.applied_patches:
-        patch_rows = "".join(
-            f"<tr><td><strong>{_escape(p.target_package)}</strong></td><td><code>{_escape(p.file_path)}</code></td>"
-            f'<td><span class="badge badge-auto">{_escape(p.status)}</span></td><td>+{_count(p.lines_added)} / -{_count(p.lines_removed)}</td></tr>'
-            for p in snapshot.applied_patches
-        )
-        patches_section = (
-            '<section><h2>Applied Remediation Patches</h2>'
-            '<div class="table-wrap"><table><thead><tr><th>Package</th><th>File</th><th>Status</th><th>Lines (+/-)</th></tr></thead>'
-            f"<tbody>{patch_rows}</tbody></table></div></section>"
-        )
-
-    campaigns_section = ""
-    if snapshot.remediation_campaigns:
-        camp_rows = "".join(
-            f"<tr><td><code>{_escape(c.campaign_id)}</code></td><td>{_escape(c.title)}</td><td><code>{_escape(c.branch)}</code></td>"
-            f"<td>{c.plans_count}</td><td>{_escape(c.status)}</td></tr>"
-            for c in snapshot.remediation_campaigns
-        )
-        campaigns_section = (
-            '<section><h2>Remediation Campaigns</h2>'
-            '<div class="table-wrap"><table><thead><tr><th>Campaign ID</th><th>Title</th><th>Branch</th><th>Plans</th><th>Status</th></tr></thead>'
-            f"<tbody>{camp_rows}</tbody></table></div></section>"
-        )
-
-    approval_groups_section = ""
+    title = "Executive Security Intelligence Report"
+    links = [("summary", "Summary"), ("actions", "Actions"), ("verification", "Verification")]
     if snapshot.approval_groups:
-        group_rows = "".join(
-            f"<tr><td><strong>{_escape(g.title)}</strong></td><td>{g.plans_count}</td><td>{_escape(g.description)}</td>"
-            f"<td>{_escape(g.recommended_action)}</td><td><code>{_escape(g.cli_command)}</code></td></tr>"
-            for g in snapshot.approval_groups
-        )
-        quick_cmd = (
-            f"vulnflow approve --all --resume --repo {_escape(snapshot.header.repository_name)}"
-        )
-        approval_groups_section = (
-            '<section><h2>Prioritized Approval Groups (Governance Authorization Gate)</h2>'
-            '<div class="table-wrap"><table><thead><tr><th>Group</th><th>Plans</th><th>Description</th><th>Action</th><th>CLI Command</th></tr></thead>'
-            f"<tbody>{group_rows}</tbody></table></div>"
-            '<div style="margin-top:12px;background:var(--wash);padding:10px 14px;border:1px solid var(--line);border-radius:4px;">'
-            f'<strong>⚡ Quick 1-Click Batch Authorization:</strong> <code>{quick_cmd}</code></div></section>'
-        )
-
-    secrets_section = ""
+        links.insert(2, ("approvals", "Approvals"))
     if snapshot.secrets_exposure:
-        sec_rows = "".join(
-            f"<tr><td><span class=\"badge badge-secret\">{_escape(s.secret_type)}</span></td>"
-            f"<td><code>{_escape(s.file_path)}</code></td><td>{_escape(s.line_number or 'N/A')}</td>"
-            f"<td>{_escape(s.action_required)}</td><td>{_escape(s.status)}</td></tr>"
-            for s in snapshot.secrets_exposure
+        links.append(("credential-exposure", "Credentials"))
+    return _render_page(
+        title,
+        _header(
+            snapshot, title, "Executive report", links,
+            ("technical-report.html", "Open Technical Remediation Report"),
         )
-        secrets_section = (
-            '<section><h2>🚨 Credentials & Secret Exposure Alert</h2>'
-            '<p class="lead" style="color:#721c24;">Hardcoded secrets and credentials detected. Software dependency bumps cannot fix secret leaks; immediate revocation in external consoles is required.</p>'
-            '<div class="table-wrap"><table><thead><tr><th>Type</th><th>File</th><th>Line</th><th>Required Action</th><th>Status</th></tr></thead>'
-            f"<tbody>{sec_rows}</tbody></table></div></section>"
+        + _section(
+            "summary", "Executive security summary", "chart",
+            f'<p class="lead">{_escape(snapshot.executive_summary.summary_sentence)}</p>'
+            + _metrics(snapshot),
         )
-
-    decisions_html = ""
-    if snapshot.strategic_decisions:
-        cards = []
-        for d in snapshot.strategic_decisions:
-            cat_badge = (
-                '<span class="badge badge-secret">Secret Leak</span>'
-                if "secret" in d.category.lower()
-                else (
-                    '<span class="badge badge-review">Major Leap</span>'
-                    if "break" in d.category.lower()
-                    else '<span class="badge badge-auto">Auto-Remediation</span>'
-                )
-            )
-            cards.append(
-                '<article class="decision-card">'
-                f'<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">'
-                f"<h3>{_escape(d.title)}</h3>{cat_badge}</div>"
-                '<dl class="decision-grid">'
-                f"<dt>Finding</dt><dd>{_escape(d.finding)}</dd>"
-                f"<dt>Why it matters</dt><dd>{_escape(d.impact)}</dd>"
-                f"<dt>AI recommendation</dt><dd>{_escape(d.recommendation)}</dd>"
-                f"<dt>Action taken</dt><dd>{_escape(d.action_taken)}</dd>"
-                f"<dt>Human decision</dt><dd><strong>{_escape(d.human_decision)}</strong></dd>"
-                f'<dt>Evidence</dt><dd class="meta">{_escape(d.evidence_summary)}</dd></dl></article>'
-            )
-        decisions_html = (
-            "<section><h2>Top Strategic AI Decisions & Risk Governance</h2>"
-            + "".join(cards)
-            + "</section>"
+        + _actions_section(snapshot)
+        + _approval_section(snapshot)
+        + _section("verification", "Remediation verification", "shield", _verification(snapshot))
+        + _decisions_section(snapshot)
+        + _section("severity", "Vulnerability severity before remediation", "chart", _severity_svg(snapshot))
+        + _prs_section(snapshot)
+        + _patch_section(snapshot)
+        + _campaigns_section(snapshot)
+        + _section(
+            "policy", "Policy and compliance posture", "shield",
+            f'<p>Corporate policy status {_badge(snapshot.policy_and_compliance.policy_status)}</p>',
         )
-
-    content = f"""
-<header class="report-header"><div><p class="eyebrow">VulnFlow Enterprise Security</p><h1>Executive Security Intelligence Report</h1></div>
-<div class="outcome"><span>Outcome</span><strong>{_escape(snapshot.header.outcome)}</strong></div></header>
-<section><h2>Execution outcome and environment</h2><dl class="meta-grid"><dt>Run ID</dt><dd>{_escape(snapshot.header.run_id)}</dd>
-<dt>Repository</dt><dd>{_escape(snapshot.header.repository_name)}</dd><dt>Generated</dt><dd>{_escape(snapshot.header.generated_at.isoformat())}</dd>
-<dt>Mode</dt><dd>{_escape(snapshot.header.execution_mode.value)}</dd><dt>Exit code</dt><dd>{snapshot.header.exit_code}</dd>
-<dt>Repository changes</dt><dd>{_escape(snapshot.header.repo_changes.value)}</dd></dl></section>
-<section><h2>Executive security summary</h2><p class="lead">{_escape(summary.summary_sentence)}</p><div class="metrics">
-<div><strong>{summary.findings_analyzed}</strong><span>Findings</span></div><div><strong>{summary.root_causes_identified}</strong><span>Root causes</span></div>
-<div><strong>{summary.expected_cves_addressed}</strong><span>Expected CVEs</span></div><div><strong>{summary.verified_cves_resolved}</strong><span>Verified CVEs</span></div>
-<div><strong>{summary.fixes_applied}</strong><span>Applied fixes</span></div><div><strong>{summary.prs_actually_created}</strong><span>Created PRs</span></div></div></section>
-<div class="tech-link-banner">
-  <span>🔬 <strong>Technical Evidence Available:</strong> Looking for per-package call stacks, sandbox logs, advisory validation, and git diffs?</span>
-  <a href="technical-report.html">Open Technical Remediation Report →</a>
-</div>
-{secrets_section}
-{decisions_html}
-<section><h2>Vulnerability severity before remediation</h2>{_severity_svg(snapshot, "Vulnerability severity before remediation")}</section>
-{prs_section}
-{patches_section}
-{campaigns_section}
-{approval_groups_section}
-<section><h2>Immediate actions required</h2><div class="table-wrap"><table><thead><tr><th>Priority</th><th>Action</th><th>Description</th><th>Actor</th><th>Status</th></tr></thead>
-<tbody>{actions or '<tr><td colspan="5">No immediate action recorded.</td></tr>'}</tbody></table></div></section>
-<section><h2>Policy and compliance posture</h2><p>Corporate policy compliance status: <strong>{_escape(snapshot.policy_and_compliance.policy_status)}</strong></p></section>
-<section><h2>Provenance & Cryptographic Audit</h2><dl><dt>Input SHA-256</dt><dd>{_escape(snapshot.provenance.input_scanner_file_sha256 or 'Live container/filesystem scan')}</dd>
-<dt>Audit chain head</dt><dd>{_escape(snapshot.provenance.audit_chain_head_hash)}</dd><dt>Model/provider</dt><dd>{_escape(snapshot.provenance.model)} / {_escape(snapshot.provenance.model_provider)}</dd>
-<dt>Trace reference</dt><dd>{_escape(snapshot.provenance.trace_reference)}</dd></dl></section>
-"""
-    template = (Path(__file__).parent / "templates" / "report.html").read_text(
-        encoding="utf-8"
+        + _section("provenance", "Provenance and audit", "file", _provenance(snapshot))
+        + _exposure_section(snapshot),
     )
-    return template.replace("{{REPORT_CONTENT}}", content)
 
 
 def generate_technical_html_report(report: RunReport | VulnFlowState) -> str:
-    """Render comprehensive technical evidence and audit report for developers and security engineers."""
+    """Render component-level evidence with native accordions."""
     snapshot = _canonical(report)
-    summary = snapshot.executive_summary
-
-    actions = "".join(
-        f"<tr><td>{_escape(item.priority)}</td><td>{_escape(item.action_type)}</td>"
-        f"<td>{_escape(item.description)}</td><td>{_escape(item.required_actor)}</td>"
-        f"<td>{_escape(item.completion_status.value)}</td></tr>"
-        for item in snapshot.action_required
-    )
+    title = "Technical Remediation & Evidence Report"
     policy_rows = "".join(
-        f"<tr><td>{_escape(rule.rule)}</td><td>{_escape(rule.status)}</td>"
+        f"<tr><td>{_escape(rule.rule)}</td><td>{_badge(rule.status)}</td>"
         f"<td>{_escape(rule.evidence)}</td></tr>"
         for rule in snapshot.policy_and_compliance.evaluated_rules
     )
     validation = (
-        list(snapshot.validation_notes.missing_evidence)
-        + list(snapshot.validation_notes.rejected_advisories)
-        + list(snapshot.validation_notes.unknown_values)
-        + list(snapshot.validation_notes.incomplete_execution)
-        + list(snapshot.validation_notes.unsupported_claims)
+        snapshot.validation_notes.missing_evidence
+        + snapshot.validation_notes.rejected_advisories
+        + snapshot.validation_notes.unknown_values
+        + snapshot.validation_notes.incomplete_execution
+        + snapshot.validation_notes.unsupported_claims
     )
-
-    prs_section = ""
-    if snapshot.pull_requests:
-        pr_rows = "".join(
-            f'<tr><td>#{pr.pr_number or "N/A"}</td><td><a href="{_escape(pr.pr_url)}">{_escape(pr.title or "Remediation PR")}</a></td>'
-            f"<td><code>{_escape(pr.branch)}</code></td><td>{_escape(', '.join(pr.affected_packages))}</td>"
-            f"<td>{_escape(pr.status)}</td></tr>"
-            for pr in snapshot.pull_requests
+    risks = snapshot.residual_risk
+    return _render_page(
+        title,
+        _header(
+            snapshot, title, "Technical report",
+            [("components", "Components"), ("verification", "Verification"),
+             ("policy", "Policy"), ("appendix", "Audit and limitations")],
+            ("report.html", "Open Executive Report"),
         )
-        prs_section = (
-            '<section><h2>Created Pull Requests</h2>'
-            '<div class="table-wrap"><table><thead><tr><th>PR #</th><th>Title</th><th>Branch</th><th>Packages</th><th>Status</th></tr></thead>'
-            f"<tbody>{pr_rows}</tbody></table></div></section>"
+        + _section("summary", "Remediation metrics", "chart", _metrics(snapshot))
+        + _section("verification", "Verification and execution", "shield", _verification(snapshot))
+        + _section(
+            "components", f"Root-cause and dependency analysis ({len(snapshot.root_causes)} components)", "branch",
+            '<p class="muted">Expand a component to inspect its advisories, proposed changes, and verification evidence.</p>'
+            + _root_sections(snapshot),
         )
-
-    patches_section = ""
-    if snapshot.applied_patches:
-        patch_rows = "".join(
-            f"<tr><td>{_escape(p.target_package)}</td><td><code>{_escape(p.file_path)}</code></td>"
-            f"<td>{_escape(p.status)}</td><td>+{_count(p.lines_added)} / -{_count(p.lines_removed)}</td></tr>"
-            for p in snapshot.applied_patches
+        + _actions_section(snapshot)
+        + _approval_section(snapshot)
+        + _prs_section(snapshot)
+        + _patch_section(snapshot)
+        + _section(
+            "policy", "Policy and compliance evaluation", "shield",
+            f"<p>Corporate policy status {_badge(snapshot.policy_and_compliance.policy_status)}</p>"
+            + _table("Policy evaluation", ("Rule", "Status", "Evidence"), policy_rows, "No rules recorded."),
         )
-        patches_section = (
-            '<section><h2>Applied Remediation Patches</h2>'
-            '<div class="table-wrap"><table><thead><tr><th>Package</th><th>File</th><th>Status</th><th>Lines (+/-)</th></tr></thead>'
-            f"<tbody>{patch_rows}</tbody></table></div></section>"
+        + _section(
+            "risks", "Residual risk", "warning",
+            _accordion("Unresolved vulnerabilities", _list(risks.unresolved_vulnerabilities, "Unknown"))
+            + _accordion("Unverified remediation", _list(risks.unverified_remediation))
+            + _accordion("Exposure uncertainty", _list(risks.exposure_uncertainty)),
         )
-
-    approval_groups_section = ""
-    if snapshot.approval_groups:
-        group_rows = "".join(
-            f"<tr><td><strong>{_escape(g.title)}</strong></td><td>{g.plans_count}</td><td>{_escape(g.description)}</td>"
-            f"<td>{_escape(g.recommended_action)}</td><td><code>{_escape(g.cli_command)}</code></td></tr>"
-            for g in snapshot.approval_groups
-        )
-        approval_groups_section = (
-            '<section><h2>Prioritized Approval Groups</h2>'
-            '<div class="table-wrap"><table><thead><tr><th>Group</th><th>Plans</th><th>Description</th><th>Action</th><th>CLI Command</th></tr></thead>'
-            f"<tbody>{group_rows}</tbody></table></div></section>"
-        )
-
-    content = f"""
-<header class="report-header"><div><p class="eyebrow">VulnFlow Technical Deep-Dive</p><h1>Technical Remediation & Evidence Report</h1></div>
-<div class="outcome"><span>Outcome</span><strong>{_escape(snapshot.header.outcome)}</strong></div></header>
-<div class="tech-link-banner">
-  <span>📋 <strong>Leadership Overview:</strong> Looking for the high-level executive summary?</span>
-  <a href="report.html">← Open Executive Report</a>
-</div>
-<section><h2>Execution outcome and environment</h2><dl class="meta-grid"><dt>Run ID</dt><dd>{_escape(snapshot.header.run_id)}</dd>
-<dt>Repository</dt><dd>{_escape(snapshot.header.repository_name)}</dd><dt>Generated</dt><dd>{_escape(snapshot.header.generated_at.isoformat())}</dd>
-<dt>Mode</dt><dd>{_escape(snapshot.header.execution_mode.value)}</dd><dt>Exit code</dt><dd>{snapshot.header.exit_code}</dd>
-<dt>Repository changes</dt><dd>{_escape(snapshot.header.repo_changes.value)}</dd></dl></section>
-<section><h2>Remediation metrics</h2><div class="metrics">
-<div><strong>{summary.findings_analyzed}</strong><span>Findings</span></div><div><strong>{summary.root_causes_identified}</strong><span>Root causes</span></div>
-<div><strong>{summary.expected_cves_addressed}</strong><span>Expected CVEs</span></div><div><strong>{summary.verified_cves_resolved}</strong><span>Verified CVEs</span></div>
-<div><strong>{summary.fixes_applied}</strong><span>Applied fixes</span></div><div><strong>{summary.prs_actually_created}</strong><span>Created PRs</span></div></div></section>
-{prs_section}
-{patches_section}
-{approval_groups_section}
-<section><h2>Immediate actions required</h2><div class="table-wrap"><table><thead><tr><th>Priority</th><th>Action</th><th>Description</th><th>Actor</th><th>Status</th></tr></thead>
-<tbody>{actions or '<tr><td colspan="5">No immediate action recorded.</td></tr>'}</tbody></table></div></section>
-<section><h2>Root-cause and dependency analysis ({len(snapshot.root_causes)} components)</h2>
-<p class="muted">Click on any component below to view full advisory validations, candidate versions, git diffs, and sandbox verification logs.</p>
-{_root_sections(snapshot)}</section>
-<section><h2>Policy and compliance evaluation</h2><p>Status: <strong>{_escape(snapshot.policy_and_compliance.policy_status)}</strong></p>
-<div class="table-wrap"><table><thead><tr><th>Rule</th><th>Status</th><th>Evidence</th></tr></thead><tbody>{policy_rows or '<tr><td colspan="3">UNKNOWN</td></tr>'}</tbody></table></div></section>
-<section><h2>Residual risk and unresolved findings</h2><h3>Unresolved vulnerabilities</h3>{_list(snapshot.residual_risk.unresolved_vulnerabilities, "UNKNOWN")}
-<h3>Unverified remediation</h3>{_list(snapshot.residual_risk.unverified_remediation)}<h3>Exposure uncertainty</h3>{_list(snapshot.residual_risk.exposure_uncertainty)}</section>
-<section><h2>Cryptographic provenance</h2><dl><dt>Input SHA-256</dt><dd>{_escape(snapshot.provenance.input_scanner_file_sha256 or 'Live container/filesystem scan')}</dd>
-<dt>Audit chain head</dt><dd>{_escape(snapshot.provenance.audit_chain_head_hash)}</dd><dt>Model/provider</dt><dd>{_escape(snapshot.provenance.model)} / {_escape(snapshot.provenance.model_provider)}</dd>
-<dt>Trace reference</dt><dd>{_escape(snapshot.provenance.trace_reference)}</dd></dl></section>
-<section><h2>Technical appendix</h2><h3>Execution evidence</h3><dl><dt>Patch</dt><dd>{snapshot.execution_evidence.patch.value}</dd>
-<dt>Tests</dt><dd>{snapshot.execution_evidence.tests.value}</dd><dt>Pull request</dt><dd>{snapshot.execution_evidence.pull_request.value}</dd>
-<dt>Rescan</dt><dd>{snapshot.execution_evidence.rescan.value}</dd></dl><h3>Validation notes and limitations</h3>{_list(validation)}</section>
-"""
-    template = (Path(__file__).parent / "templates" / "report.html").read_text(
-        encoding="utf-8"
+        + _section(
+            "appendix", "Technical appendix", "file",
+            _provenance(snapshot) + _accordion("Validation notes and limitations", _list(validation)),
+        ),
     )
-    return template.replace("{{REPORT_CONTENT}}", content)
 
 
 def generate_html_report(report: RunReport | VulnFlowState) -> str:

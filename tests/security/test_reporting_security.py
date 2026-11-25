@@ -9,7 +9,7 @@ import json
 
 from tests.unit.test_reporting import FIXED_TIME, report_state
 from vulnflow.reporting.builder import build_run_report
-from vulnflow.reporting.html_report import generate_html_report
+from vulnflow.reporting.html_report import generate_html_report, generate_technical_html_report
 from vulnflow.reporting.json_report import generate_json_report
 from vulnflow.reporting.markdown import generate_markdown_report
 
@@ -26,6 +26,7 @@ def test_secret_and_hostile_content_are_safe_in_every_output() -> None:
         json.dumps(generate_json_report(report)),
         generate_markdown_report(report),
         generate_html_report(report),
+        generate_technical_html_report(report),
     ]
     assert all(secret not in output for output in outputs)
     html = outputs[2]
@@ -36,6 +37,19 @@ def test_secret_and_hostile_content_are_safe_in_every_output() -> None:
     assert 'href="javascript:' not in html.lower()
     assert 'src="http' not in html.lower()
     assert "Content-Security-Policy" in html
+    assert "<script" not in outputs[3].lower()
+    assert 'href="javascript:' not in outputs[3].lower()
+
+
+def test_existing_snapshot_cannot_make_unsafe_html_links() -> None:
+    report = build_run_report(report_state(), generated_at=FIXED_TIME)
+    pr = report.pull_requests[0].model_copy(update={"pr_url": "javascript:warning"})
+    report = report.model_copy(update={"pull_requests": (pr,)})
+
+    for renderer in (generate_html_report, generate_technical_html_report):
+        rendered = renderer(report)
+        assert "Created Pull Requests" in rendered
+        assert 'href="javascript:' not in rendered
 
 
 def test_missing_ai_evidence_is_explicit() -> None:
