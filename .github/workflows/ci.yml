@@ -1,5 +1,5 @@
 # .github/workflows/ci.yml
-# Runs automated linting, test suites, and type checking on pull requests and pushes.
+# Runs the Python test suite on pull requests and pushes.
 
 name: CI
 
@@ -35,16 +35,7 @@ jobs:
       - name: Install Package
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
+          python -m pip install -e ".[dev]"
 
-      - name: Run Contract Tests
-        run: |
-          PYTHONPATH=src python3 tests/contract/test_contracts.py
-
-      - name: Run Phase 1 Spine Tests
-        run: |
-          PYTHONPATH=src python3 tests/integration/test_phase1_spine.py
-
-      - name: Run Phase 2 Intelligence Tests
-        run: |
-          PYTHONPATH=src python3 tests/integration/test_phase2_intelligence.py
+      - name: Run tests
+        run: python -m pytest -q

@@ -249,6 +249,6 @@ if __name__ == "__main__":
     test_stub_mcp_servers()
     print("Running test_fastmcp_server_protocol...")
     test_fastmcp_server_protocol()
-    print("Running test_phase_0_gate_stubbed_run...")
-    test_phase_0_gate_stubbed_run()
+    print("Running test_phase_0_gate_rejects_synthetic_mutation_success...")
+    test_phase_0_gate_rejects_synthetic_mutation_success()
     print("\nALL CONTRACT & PHASE 0 GATE TESTS PASSED!")
