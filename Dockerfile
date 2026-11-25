@@ -4,7 +4,7 @@
 # ==========================================
 # STAGE 1: Build Frontend Web Dashboard (Vite + React)
 # ==========================================
-FROM node:20-alpine AS ui-builder
+FROM node:22-alpine AS ui-builder
 WORKDIR /app/ui
 
 # Install dependencies

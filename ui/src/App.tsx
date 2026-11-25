@@ -40,8 +40,13 @@ const NAV_CONFIGS: NavConfig[] = [
   { id: 'metrics', label: 'Metrics & KPIs', icon: IconBarChart },
 ];
 
+function readTab(): TabType {
+  const hash = window.location.hash.replace(/^#\/?/, '');
+  return NAV_CONFIGS.find((item) => item.id === hash)?.id ?? 'runs';
+}
+
 export function App() {
-  const [activeTab, setActiveTab] = useState<TabType>('runs');
+  const [activeTab, setActiveTab] = useState<TabType>(readTab);
   const [pendingApprovalsCount, setPendingApprovalsCount] = useState<number>(0);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
 
@@ -55,15 +60,17 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const hash = window.location.hash.replace('#/', '').replace('#', '') as TabType;
-    if (NAV_CONFIGS.some((item) => item.id === hash)) {
-      setActiveTab(hash);
-    }
-    loadApprovalStatus();
+    const onHashChange = () => setActiveTab(readTab());
+    window.addEventListener('hashchange', onHashChange);
+    const initialLoad = setTimeout(loadApprovalStatus, 0);
 
     // Poll every 12 seconds for fresh approval gate changes
     const interval = setInterval(loadApprovalStatus, 12000);
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(initialLoad);
+      clearInterval(interval);
+      window.removeEventListener('hashchange', onHashChange);
+    };
   }, [loadApprovalStatus]);
 
   const handleManualRefresh = async () => {
@@ -74,7 +81,7 @@ export function App() {
 
   const handleTabChange = (tab: TabType) => {
     setActiveTab(tab);
-    window.location.hash = `#/${tab}`;
+    window.history.pushState(null, '', `#/${tab}`);
     loadApprovalStatus();
   };
 

@@ -10,8 +10,9 @@ import logging
 import re
 import shutil
 import subprocess
+import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from vulnflow.adapters.input.trivy import TrivyAdapter
 from vulnflow.contracts.finding import (
@@ -21,8 +22,8 @@ from vulnflow.contracts.finding import (
     SeverityLevel,
     compute_finding_id,
 )
-from vulnflow.core.redaction import redact_secrets
 from vulnflow.mcp_servers.fastmcp import FastMCP
+from vulnflow.sandbox.runner import SandboxExecutionError, default_sandbox
 
 logger = logging.getLogger("vulnflow.mcp_servers.scan")
 
@@ -38,7 +39,9 @@ class ScanServer:
     def __init__(self) -> None:
         self.mcp = mcp
 
-    def scan_source_secrets(self, repo_path: Path, repo: str = "workspace") -> List[Finding]:
+    def scan_source_secrets(
+        self, repo_path: Path, repo: str = "workspace", *, strict: bool = False
+    ) -> List[Finding]:
         """
         Deep source-code scanner for hardcoded credentials, database passwords, API keys, and PII.
         Complements container/package scanners to ensure all repository credentials generate actionable remediation plans.
@@ -55,7 +58,7 @@ class ScanServer:
         skip_dirs = {".git", "node_modules", ".venv", "venv", "__pycache__", ".vulnflow", "dist", "build"}
 
         for p in repo_path.rglob("*"):
-            if not p.is_file() or p.suffix not in exts:
+            if p.is_symlink() or not p.is_file() or (p.suffix not in exts and p.name != ".env"):
                 continue
             if any(part in skip_dirs for part in p.parts):
                 continue
@@ -69,8 +72,6 @@ class ScanServer:
                     for rule_id, pat in patterns:
                         m = pat.search(line)
                         if m:
-                            match_val = m.group(0)
-                            safe_match = redact_secrets(match_val)
                             fnd_id = compute_finding_id(
                                 scanner="vulnflow-secret",
                                 repo=repo,
@@ -96,95 +97,133 @@ class ScanServer:
                                     "rule_id": rule_id,
                                     "category": "SECRET",
                                     "title": f"Hardcoded {rule_id.replace('-', ' ').title()}",
-                                    "match_redacted": safe_match,
                                 },
                             ))
                             break
             except Exception as exc:
+                if strict:
+                    raise
                 logger.debug("Could not scan file %s for secrets: %s", p, exc)
 
         return findings
 
-    def _ensure_npm_lockfile(self, repo_path: Path) -> Optional[Path]:
-        """
-        If package.json exists without package-lock.json, generate a synthetic lockfile v2
-        so Trivy can discover all declared npm package vulnerabilities without requiring npm install.
-        """
+    @staticmethod
+    def _manifest_dependencies(repo_path: Path) -> List[Dict[str, str]]:
+        """Read dependency coordinates from the isolated checkout for policy recheck."""
+        dependencies: List[Dict[str, str]] = []
         pkg_json = repo_path / "package.json"
-        pkg_lock = repo_path / "package-lock.json"
-        if not pkg_json.exists() or pkg_lock.exists():
-            return None
+        if pkg_json.exists():
+            try:
+                data = json.loads(pkg_json.read_text(encoding="utf-8"))
+                for section in ("dependencies", "devDependencies"):
+                    values = data.get(section, {})
+                    if isinstance(values, dict):
+                        for name, version in values.items():
+                            dependencies.append(
+                                {
+                                    "package": f"npm:{name}",
+                                    "version": str(version).lstrip("^~><= "),
+                                    "ecosystem": "npm",
+                                }
+                            )
+            except (OSError, json.JSONDecodeError):
+                pass
 
-        try:
-            with open(pkg_json, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            deps = data.get("dependencies", {})
-            dev_deps = data.get("devDependencies", {})
-            all_deps = {**deps, **dev_deps}
-            if not all_deps:
-                return None
+        requirements = repo_path / "requirements.txt"
+        if requirements.exists():
+            try:
+                for raw_line in requirements.read_text(encoding="utf-8").splitlines():
+                    line = raw_line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    match = re.match(
+                        r"([A-Za-z0-9_.-]+)\s*(?:==|>=|~=|<=|>|<)?\s*([^;\s]+)?",
+                        line,
+                    )
+                    if match:
+                        dependencies.append(
+                            {
+                                "package": f"pip:{match.group(1)}",
+                                "version": match.group(2) or "latest",
+                                "ecosystem": "PyPI",
+                            }
+                        )
+            except OSError:
+                pass
 
-            packages = {"": {"name": data.get("name", "app"), "version": data.get("version", "1.0.0"), "dependencies": deps}}
-            lock_deps = {}
-            for pkg_name, ver in all_deps.items():
-                clean_ver = ver.lstrip("^~>=< ")
-                packages[f"node_modules/{pkg_name}"] = {"version": clean_ver}
-                lock_deps[pkg_name] = {"version": clean_ver}
+        pom = repo_path / "pom.xml"
+        if pom.exists():
+            try:
+                root = ET.parse(pom).getroot()
+                namespace = ""
+                if root.tag.startswith("{"):
+                    namespace = root.tag.split("}", 1)[0] + "}"
+                for dependency in root.findall(f".//{namespace}dependency"):
+                    group = dependency.findtext(f"{namespace}groupId", "")
+                    artifact = dependency.findtext(f"{namespace}artifactId", "")
+                    version = dependency.findtext(f"{namespace}version", "latest")
+                    if group and artifact:
+                        dependencies.append(
+                            {
+                                "package": f"maven:{group}:{artifact}",
+                                "version": version,
+                                "ecosystem": "maven",
+                            }
+                        )
+            except (OSError, ET.ParseError):
+                pass
+        return dependencies
 
-            lock_data = {
-                "name": data.get("name", "app"),
-                "version": data.get("version", "1.0.0"),
-                "lockfileVersion": 2,
-                "requires": True,
-                "packages": packages,
-                "dependencies": lock_deps,
-            }
-            with open(pkg_lock, "w", encoding="utf-8") as f:
-                json.dump(lock_data, f, indent=2)
-            logger.info("Generated synthetic package-lock.json for %d npm dependencies", len(all_deps))
-            return pkg_lock
-        except Exception as exc:
-            logger.warning("Could not generate synthetic package-lock.json: %s", exc)
-            return None
-
-    def scan_run(self, repo: str, scanner: str = "trivy") -> List[Dict[str, Any]]:
-        """MCP tool: scan_run - Runs vulnerability scan on target repo."""
-        logger.info("Executing scan_run with %s on %s", scanner, repo)
-        repo_path = Path(repo)
+    def _scan_checkout(
+        self, repo_path: Path, scanner: str, repo_label: str,
+    ) -> Dict[str, Any]:
+        """Run a scanner and return explicit execution evidence alongside findings."""
         findings: List[Finding] = []
-
-        # Ensure npm lockfile exists so Trivy does not silently skip package.json
-        synth_lock: Optional[Path] = None
-        if repo_path.exists():
-            synth_lock = self._ensure_npm_lockfile(repo_path)
+        scanner_executed = False
+        scan_complete = False
+        error: str | None = None
+        dependency_targets: list[str] = []
 
         # 1. Run live external scanner (Trivy) for dependency CVEs and vendor tokens
         try:
-            bin_path = shutil.which(scanner)
-            if bin_path and repo_path.exists():
-                try:
-                    cmd = [bin_path, "fs", "--format", "json", str(repo_path)]
-                    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
-                    if res.returncode == 0 and res.stdout.strip():
-                        adapter = TrivyAdapter()
-                        try:
-                            data = json.loads(res.stdout)
-                            findings.extend(adapter.parse_data(data, repo=repo))
-                        except Exception as parse_exc:
-                            logger.warning("Failed to parse live %s JSON output: %s", scanner, parse_exc)
-                except Exception as exc:
-                    logger.warning("Live scan_run failed: %s; returning empty baseline", exc)
-        finally:
-            if synth_lock and synth_lock.exists():
-                try:
-                    synth_lock.unlink()
-                except Exception:
-                    pass
+            scanner_name = scanner.lower().strip()
+            if scanner_name != "trivy":
+                raise ValueError(f"Live scanning is unavailable for '{scanner_name}'")
+            bin_path = shutil.which(scanner_name)
+            if not bin_path:
+                raise ValueError("Trivy is not installed")
+            scanner_executed = True
+            res = subprocess.run(
+                [
+                    bin_path, "fs", "--config", "", "--ignorefile", "",
+                    "--secret-config", "", "--scanners", "vuln,secret", "--format", "json", ".",
+                ],
+                cwd=repo_path, capture_output=True, text=True, check=False, timeout=120,
+            )
+            if res.returncode != 0:
+                raise ValueError(f"Trivy exited with code {res.returncode}")
+            data = json.loads(res.stdout)
+            results = data.get("Results") if isinstance(data, dict) else None
+            if not isinstance(results, list) or not results or any(
+                not isinstance(target, dict) for target in results
+            ):
+                raise ValueError("Trivy returned no usable scan targets")
+            findings.extend(TrivyAdapter().parse_data(data, repo=repo_label))
+            dependency_targets = [
+                str(target.get("Type", "")) for target in results
+                if target.get("Class") == "lang-pkgs"
+            ]
+            scan_complete = True
+        except (ValueError, OSError, subprocess.SubprocessError, TypeError, AttributeError) as exc:
+            error = f"Live scan failed: {exc}"
+            logger.warning(error)
 
         # 2. Augment with source-level secret, database password, API key, and PII detection
         if repo_path.exists():
             try:
-                sec_findings = self.scan_source_secrets(repo_path, repo=repo)
+                sec_findings = self.scan_source_secrets(
+                    repo_path, repo=repo_label, strict=True
+                )
                 existing_locs = {(f.location.file_path, f.location.line) for f in findings if f.location}
                 for sf in sec_findings:
                     if sf.location and (sf.location.file_path, sf.location.line) not in existing_locs:
@@ -192,8 +231,54 @@ class ScanServer:
                         existing_locs.add((sf.location.file_path, sf.location.line))
             except Exception as sec_exc:
                 logger.warning("Source secret scanning error: %s", sec_exc)
+                scan_complete = False
+                error = "Source secret scan did not complete"
 
-        return [f.to_dict() for f in findings]
+        return {
+            "scanner": scanner,
+            "executed": scanner_executed,
+            "complete": scan_complete,
+            "error": error,
+            "findings": [f.to_dict() for f in findings],
+            "dependencies": self._manifest_dependencies(repo_path),
+            "dependency_targets": dependency_targets,
+        }
+
+    def scan_run(self, repo: str, scanner: str = "trivy") -> List[Dict[str, Any]]:
+        """MCP tool: scan_run - Runs vulnerability scan on target repo."""
+        logger.info("Executing scan_run with %s on %s", scanner, repo)
+        result = self.scan_verify(repo, scanner)
+        return list(result["findings"])
+
+    def scan_verify(
+        self,
+        repo: str,
+        scanner: str = "trivy",
+        branch: str | None = None,
+        finding_types: List[str] | None = None,
+    ) -> Dict[str, Any]:
+        """Run a branch-specific post-fix scan and fail closed if evidence is incomplete."""
+        repo_path = Path(repo)
+        try:
+            with default_sandbox.isolated_checkout(repo_path, branch=branch) as checkout:
+                revision = default_sandbox.checkout_revision(checkout)
+                result = self._scan_checkout(checkout, scanner, repo_label=repo)
+        except (OSError, SandboxExecutionError, subprocess.SubprocessError) as exc:
+            return {
+                "scanner": scanner,
+                "branch": branch or "HEAD",
+                "executed": False,
+                "complete": False,
+                "error": str(exc),
+                "findings": [],
+            }
+
+        if "vuln" in (finding_types or []) and not result["dependency_targets"]:
+            result["complete"] = False
+            result["error"] = result["error"] or "Trivy did not scan a dependency inventory"
+        result["branch"] = branch or "HEAD"
+        result["revision"] = revision
+        return result
 
     def scan_diff(self, before: List[str], after: List[str]) -> Dict[str, Any]:
         """MCP tool: scan_diff - Compares findings before and after fix."""
@@ -217,6 +302,19 @@ scan_server = ScanServer()
 )
 def scan_run(repo: str, scanner: str = "trivy") -> List[Dict[str, Any]]:
     return scan_server.scan_run(repo, scanner)
+
+
+@mcp.tool(
+    name="scan_verify",
+    description="Executes a post-fix scanner on an isolated branch checkout and returns execution evidence.",
+)
+def scan_verify(
+    repo: str,
+    scanner: str = "trivy",
+    branch: str | None = None,
+    finding_types: List[str] | None = None,
+) -> Dict[str, Any]:
+    return scan_server.scan_verify(repo, scanner, branch, finding_types)
 
 
 @mcp.tool(

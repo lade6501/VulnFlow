@@ -254,7 +254,7 @@ def test_f09_findings_report_markdown_and_json(tmp_path_factory: Any = None) -> 
     repo_path = str(Path(__file__).resolve().parent.parent.parent / "samples" / "npm-simple-bump")
     report_path = str(Path(__file__).resolve().parent.parent.parent / "data" / "fixtures" / "sample_trivy_report.json")
 
-    state = VulnFlowState(repo_path=repo_path, report_path=report_path, mode="pr")
+    state = VulnFlowState(repo_path=repo_path, report_path=report_path, mode="report")
     result = run_workflow(state)
 
     # 1. Test Markdown Report
@@ -411,12 +411,13 @@ def test_f20_self_correction_loop() -> None:
         requires_approval=False,
     )
 
-    # 1. Retry 0: test failure with error context triggers fallback version
+    # 1. With no advisory evidence, the agent must not invent a fallback version.
     error_output = "TypeError: lodash.cloneDeep is not a function\n    at app.js:42:15"
     p1 = agent.analyze_failure_and_correct(plan, error_output, retry_count=0, max_retries=2)
-    assert p1.target_version == "4.99.9"
-    assert "Self-Correction Retry #1" in p1.rationale
-    assert "TypeError" in p1.rationale
+    assert p1.target_version == "5.0.0"
+    assert p1.risk_tier == RiskTier.REVIEW
+    assert p1.requires_approval is True
+    assert "instead of inventing a version" in p1.rationale
 
     # 2. Retries exhausted (retry_count == 2): escalates to REVIEW tier
     p2 = agent.analyze_failure_and_correct(plan, error_output, retry_count=2, max_retries=2)
@@ -479,7 +480,8 @@ def test_f21_human_approval_gate() -> None:
             dec = global_approval_gate.get_decision(plan_id, repo_path=str(repo_dir))
             assert dec["reason"] == "Library not vetted for production use"
 
-            # 3. Human approval resumes run and creates PR
+            # 3. Human approval resumes the run, but cannot bypass missing git
+            # and scanner prerequisites.
             global_approval_gate.record_decision(
                 plan_id=plan_id,
                 approved=True,
@@ -490,10 +492,10 @@ def test_f21_human_approval_gate() -> None:
             assert global_approval_gate.is_approved(plan_id, repo_path=str(repo_dir)) is True
 
             resumed_result = run_workflow(paused_state)
-            assert resumed_result.terminal_status == "completed"
-            assert resumed_result.exit_code == 0
+            assert resumed_result.terminal_status == "error"
+            assert resumed_result.exit_code != 0
             assert len(resumed_result.approved_plans) >= 1
-            assert len(resumed_result.pull_requests) >= 1
+            assert len(resumed_result.pull_requests) == 0
     finally:
         registry_server.clear_overrides()
 
@@ -586,14 +588,15 @@ def test_phase_2_gate_end_to_end() -> None:
     """Phase 2 Gate: All policy and vulnerability sample scenarios run end to end with real knowledge tools, including unapproved-fix case producing a ticket and no PR."""
     base_dir = Path(__file__).resolve().parent.parent.parent
 
-    # Scenario 1: Approved simple bump produces verified PR
+    # Scenario 1: A fixture directory without git/remote/scanner cannot produce
+    # a verified PR, even when policy approves the proposed version.
     s1_repo = str(base_dir / "samples" / "npm-simple-bump")
     s1_report = str(base_dir / "data" / "fixtures" / "sample_trivy_report.json")
     st1 = VulnFlowState(repo_path=s1_repo, report_path=s1_report, mode="pr")
     res1 = run_workflow(st1)
-    assert res1.terminal_status == "completed"
-    assert res1.exit_code == 0
-    assert len(res1.pull_requests) >= 1
+    assert res1.terminal_status == "error"
+    assert res1.exit_code != 0
+    assert len(res1.pull_requests) == 0
 
     # Scenario 2: Transitive-only vulnerability collapses to direct root cause
     s2_repo = str(base_dir / "samples" / "npm-transitive-only")

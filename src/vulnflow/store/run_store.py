@@ -60,13 +60,13 @@ class RunStore:
             "error": state.error,
             "blocking_reason": state.blocking_reason,
             "exception_ticket": state.exception_ticket,
-            "exit_code": state.exit_code,
+            "exit_code": None if state.terminal_status == "queued" else state.exit_code,
             "terminal_status": state.terminal_status,
         }
         data = {
             "run_id": state.run_id,
             "terminal_status": state.terminal_status,
-            "exit_code": state.exit_code,
+            "exit_code": None if state.terminal_status == "queued" else state.exit_code,
             "repo_path": state.repo_path,
             "mode": state.mode,
             "findings_count": len(state.findings),

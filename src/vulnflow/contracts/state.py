@@ -6,7 +6,7 @@ Defines state models passed between LangGraph orchestration nodes.
 from __future__ import annotations
 
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from vulnflow.contracts.finding import Finding
@@ -63,7 +63,13 @@ class VulnFlowState:
     terminal_status: str = "pending"
 
     def to_dict(self) -> Dict[str, Any]:
-        """Serialize state object for persistence or logging."""
+        """Serialize the complete resumable workflow state.
+
+        Count fields are retained for backwards-compatible reporting, but a checkpoint
+        must also contain the underlying findings and audit evidence.  Persisting only
+        counts made approval resumes unverifiable because the verifier received an
+        empty pre-remediation baseline.
+        """
         return {
             "run_id": self.run_id,
             "repo_path": self.repo_path,
@@ -72,6 +78,11 @@ class VulnFlowState:
             "mode": self.mode,
             "ecosystem": self.ecosystem,
             "current_node": self.current_node,
+            "raw_findings": self.raw_findings,
+            "findings": [finding.to_dict() for finding in self.findings],
+            "deduped_findings": [
+                finding.to_dict() for finding in self.deduped_findings
+            ],
             "raw_findings_count": len(self.raw_findings),
             "findings_count": len(self.findings),
             "deduped_findings_count": len(self.deduped_findings),
@@ -85,8 +96,11 @@ class VulnFlowState:
             "test_results": self.test_results,
             "pull_requests": self.pull_requests,
             "verification_results": self.verification_results,
+            "audit_events": self.audit_events,
             "audit_events_count": len(self.audit_events),
             "retry_count": self.retry_count,
+            "max_retries": self.max_retries,
+            "auto_approve": self.auto_approve,
             "error": self.error,
             "blocking_reason": self.blocking_reason,
             "exception_ticket": self.exception_ticket,
@@ -97,9 +111,6 @@ class VulnFlowState:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> VulnFlowState:
         """Reconstruct VulnFlowState from a dictionary."""
-        from vulnflow.contracts.remediation_plan import RemediationPlan
-        from vulnflow.contracts.finding import Finding
-
         state = cls(
             repo_path=data.get("repo_path", "."),
             report_path=data.get("report_path"),
@@ -111,6 +122,18 @@ class VulnFlowState:
             state.run_id = data["run_id"]
         if "current_node" in data:
             state.current_node = data["current_node"]
+        if "raw_findings" in data:
+            state.raw_findings = list(data["raw_findings"])
+        if "findings" in data:
+            state.findings = [
+                Finding.from_dict(finding) if isinstance(finding, dict) else finding
+                for finding in data["findings"]
+            ]
+        if "deduped_findings" in data:
+            state.deduped_findings = [
+                Finding.from_dict(finding) if isinstance(finding, dict) else finding
+                for finding in data["deduped_findings"]
+            ]
         if "root_cause_groups" in data:
             state.root_cause_groups = data["root_cause_groups"]
         if "plans" in data:
@@ -131,8 +154,14 @@ class VulnFlowState:
             state.pull_requests = data["pull_requests"]
         if "verification_results" in data:
             state.verification_results = data["verification_results"]
+        if "audit_events" in data:
+            state.audit_events = list(data["audit_events"])
         if "retry_count" in data:
             state.retry_count = data["retry_count"]
+        if "max_retries" in data:
+            state.max_retries = data["max_retries"]
+        if "auto_approve" in data:
+            state.auto_approve = bool(data["auto_approve"])
         if "error" in data:
             state.error = data["error"]
         if "blocking_reason" in data:

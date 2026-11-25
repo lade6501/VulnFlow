@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import urllib.error
 import urllib.request
 from typing import Any, Dict
@@ -46,10 +47,11 @@ class RegistryServer:
         """MCP tool: registry_check - Confirms that the target version exists in registry."""
         clean_pkg = package.split(":")[-1]
         eco = ecosystem.lower()
-        if "pip" in package or "pypi" in package:
+        prefix = package.split(":", 1)[0].lower() if ":" in package else ""
+        if prefix in {"pip", "pypi", "python"}:
             eco = "pypi"
-        elif "npm" in package:
-            eco = "npm"
+        elif prefix in {"npm", "maven"}:
+            eco = prefix
 
         logger.info("Executing registry_check for %s@%s in %s", clean_pkg, version, eco)
 
@@ -59,6 +61,7 @@ class RegistryServer:
             is_avail = self._availability_overrides[override_key]
             return {
                 "available": is_avail,
+                "confirmed": is_avail,
                 "ecosystem": eco,
                 "package": clean_pkg,
                 "version": version,
@@ -82,7 +85,7 @@ class RegistryServer:
                 req = urllib.request.Request(url, headers={"User-Agent": "VulnFlow-Registry/1.0"})
                 with urllib.request.urlopen(req, timeout=3.0) as resp:
                     if resp.status == 200:
-                        return {"available": True, "ecosystem": "npm", "package": clean_pkg, "version": version}
+                        return {"available": True, "confirmed": True, "ecosystem": "npm", "package": clean_pkg, "version": version}
             except urllib.error.HTTPError as he:
                 if he.code == 404:
                     return {
@@ -94,7 +97,7 @@ class RegistryServer:
                     }
             except Exception:
                 pass
-            return {"available": True, "ecosystem": "npm", "package": clean_pkg, "version": version, "cached": True}
+            return {"available": True, "confirmed": False, "ecosystem": "npm", "package": clean_pkg, "version": version, "reason": "Registry unavailable"}
 
         # Check PyPI
         elif eco in ("pip", "pypi", "python"):
@@ -103,7 +106,7 @@ class RegistryServer:
                 req = urllib.request.Request(url, headers={"User-Agent": "VulnFlow-Registry/1.0"})
                 with urllib.request.urlopen(req, timeout=3.0) as resp:
                     if resp.status == 200:
-                        return {"available": True, "ecosystem": "pypi", "package": clean_pkg, "version": version}
+                        return {"available": True, "confirmed": True, "ecosystem": "pypi", "package": clean_pkg, "version": version}
             except urllib.error.HTTPError as he:
                 if he.code == 404:
                     return {
@@ -115,9 +118,29 @@ class RegistryServer:
                     }
             except Exception:
                 pass
-            return {"available": True, "ecosystem": "pypi", "package": clean_pkg, "version": version, "cached": True}
+            return {"available": True, "confirmed": False, "ecosystem": "pypi", "package": clean_pkg, "version": version, "reason": "Registry unavailable"}
 
-        return {"available": True, "ecosystem": eco, "package": clean_pkg, "version": version}
+        if eco == "maven":
+            coordinates = package.removeprefix("maven:").split(":")
+            if len(coordinates) != 2 or not all(
+                re.fullmatch(r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*", part)
+                for part in coordinates
+            ) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version):
+                return {"available": False, "confirmed": False, "reason": "Invalid Maven coordinates"}
+            group, artifact = coordinates
+            group_path = group.replace(".", "/")
+            url = f"https://repo.maven.apache.org/maven2/{group_path}/{artifact}/{version}/{artifact}-{version}.pom"
+            try:
+                with urllib.request.urlopen(url, timeout=3.0) as response:
+                    if response.status == 200:
+                        return {"available": True, "confirmed": True, "ecosystem": eco, "package": package, "version": version}
+            except urllib.error.HTTPError as exc:
+                if exc.code == 404:
+                    return {"available": False, "confirmed": False, "reason": "Version not found in Maven Central"}
+            except OSError:
+                pass
+
+        return {"available": True, "confirmed": False, "ecosystem": eco, "package": clean_pkg, "version": version, "reason": "Registry verification unavailable"}
 
 
 registry_server = RegistryServer()

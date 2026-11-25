@@ -33,6 +33,8 @@ export const PlanApproval: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'danger' } | null>(null);
   const [selectedGroups, setSelectedGroups] = useState<Record<string, string>>({});
+  const [apiToken, setApiToken] = useState('');
+  const [repoOverride, setRepoOverride] = useState('');
 
   const loadApprovals = () => {
     fetchPendingApprovals().then((livePlans) => {
@@ -63,20 +65,23 @@ export const PlanApproval: React.FC = () => {
       import.meta.env?.VITE_REVIEWER_ID || 'security-lead@corp.internal',
       reason,
       reviewerGroup,
-      plan.repo,
+      repoOverride.trim() || (plan.repo === 'workspace' ? '.' : plan.repo),
+      apiToken.trim(),
     );
 
     setMessage({
-      text: !result.ok
+      text: result.status === 'unauthorized'
+        ? 'A valid API token is required to record a decision.'
+        : !result.ok
         ? `Decision for ${plan.id} could not be recorded.`
         : result.status === 'pending'
           ? `${reviewerGroup} approval recorded for ${plan.id}; additional groups are still pending.`
           : approved
-            ? `Plan ${plan.id} fully authorized. Workflow resumed and PR creation initiated.`
+            ? `Plan ${plan.id} approved.${result.terminalStatus ? ` Workflow status: ${result.terminalStatus}.` : ''}`
             : `Plan ${plan.id} rejected. Policy block enforced.`,
       type: result.ok ? 'success' : 'danger',
     });
-    if (result.status !== 'pending') {
+    if (result.ok && result.status !== 'pending') {
       setPlans(plans.filter((p) => p.id !== plan.id));
     }
     setTimeout(loadApprovals, 1500);
@@ -93,6 +98,19 @@ export const PlanApproval: React.FC = () => {
           Review remediation proposals classified under the <strong className="text-slate-800">REVIEW</strong> tier before any changes are committed or pull requests opened.
         </p>
       </div>
+
+      {plans.length > 0 && (
+        <div className="flex flex-wrap gap-3">
+          <label className="grid gap-1 text-xs text-slate-700">
+            Control-plane API token
+            <input type="password" autoComplete="off" value={apiToken} onChange={(event) => setApiToken(event.target.value)} className="rounded border px-2 py-1" />
+          </label>
+          <label className="grid gap-1 text-xs text-slate-700">
+            Server repository path (optional)
+            <input value={repoOverride} onChange={(event) => setRepoOverride(event.target.value)} className="rounded border px-2 py-1" />
+          </label>
+        </div>
+      )}
 
       {message && (
         <div

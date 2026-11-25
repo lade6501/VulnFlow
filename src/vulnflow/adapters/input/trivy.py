@@ -17,7 +17,6 @@ from vulnflow.contracts.finding import (
     SeverityLevel,
     compute_finding_id,
 )
-from vulnflow.core.redaction import redact_secrets
 
 logger = logging.getLogger("vulnflow.adapters.input.trivy")
 
@@ -204,10 +203,6 @@ class TrivyAdapter:
         title = item.get("Title", "Detected credential in source")
         start_line = item.get("StartLine", 1)
 
-        # Redact any sensitive secret content before persisting into Finding contract
-        match_val = item.get("Match", "")
-        safe_match = redact_secrets(match_val) if match_val else ""
-
         fnd_id = compute_finding_id(
             scanner="trivy",
             repo=repo,
@@ -234,6 +229,5 @@ class TrivyAdapter:
                 "rule_id": rule_id,
                 "category": category,
                 "title": title,
-                "match_redacted": safe_match,
             },
         )

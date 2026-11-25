@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 from vulnflow.contracts.remediation_plan import (
     PolicyResult,
@@ -248,6 +249,8 @@ def test_pr_node_opens_single_campaign_pr_with_matrix(tmp_path: Path) -> None:
             {"plan_id": plan2.id, "branch": campaign_branch, "file": "package.json", "is_campaign": True},
         ],
         verification_results=[{
+            "branch": campaign_branch,
+            "revision": "test-verified-revision",
             "verified": True,
             "rescan_clean": True,
             "tests_passed": True,
@@ -255,7 +258,20 @@ def test_pr_node_opens_single_campaign_pr_with_matrix(tmp_path: Path) -> None:
         }],
     )
 
-    final_state = orchestrator_pr_node(state)
+    def confirm_pr(*, branch: str, title: str, body: str, repo_dir: str, expected_revision: str) -> dict:
+        assert repo_dir == str(tmp_path)
+        assert expected_revision == "test-verified-revision"
+        assert "Consolidated Remediation Campaign" in body
+        return {
+            "status": "opened", "pr_url": "https://github.com/example/repo/pull/1",
+            "branch": branch, "title": title, "pr_number": 1,
+        }
+
+    with (
+        patch("vulnflow.orchestrator.nodes.git_server.pr_create", side_effect=confirm_pr),
+        patch("vulnflow.orchestrator.nodes.registry_check", return_value={"confirmed": True}),
+    ):
+        final_state = orchestrator_pr_node(state)
 
     # Exactly 1 Pull Request created
     assert len(final_state.pull_requests) == 1

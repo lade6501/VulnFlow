@@ -38,15 +38,33 @@ def route_after_approve(state: VulnFlowState) -> str:
 
 
 def route_after_test(state: VulnFlowState) -> str:
-    """Route test results: proceed to PR creation, retry fix, or escalate to exception."""
-    has_failures = any(not r.get("build_clean", True) or not r.get("passed", True) for r in state.test_results)
+    """Route test results to verification, an evidence-backed retry, or escalation."""
+    has_failures = any(
+        not result.get("build_clean") or not result.get("passed")
+        or result.get("verification_available") is False
+        for result in state.test_results
+    )
     if not has_failures:
-        if state.mode == "dry-run":
-            return "verify"
-        return "pr"
+        return "verify"
 
-    if state.retry_count < state.max_retries:
+    if any(result.get("verification_available") is False for result in state.test_results):
+        return "exception"
+
+    if state.retry_count < state.max_retries and not any(
+        result.get("retry_available") is False for result in state.test_results
+    ):
         state.retry_count += 1
         return "fix"
 
     return "exception"
+
+
+def route_after_verify(state: VulnFlowState) -> str:
+    """Open a PR only after every branch has real successful verification evidence."""
+    if state.mode != "pr":
+        return "end"
+    if state.verification_results and all(
+        bool(result.get("verified", False)) for result in state.verification_results
+    ):
+        return "pr"
+    return "end"

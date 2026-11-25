@@ -24,8 +24,32 @@ logger = logging.getLogger("vulnflow.api")
 
 from api.routes.approvals import list_pending_approvals, submit_approval
 from api.routes.graph import get_graph_data
-from api.routes.runs import get_run, get_run_report, list_runs, trigger_run
-from api.routes.webhooks import handle_scan_webhook
+from api.routes.runs import (
+    RunQueueFull,
+    enqueue_run,
+    get_run,
+    get_run_report,
+    list_runs,
+)
+from api.security import (
+    MAX_REQUEST_BYTES,
+    ApiSecurityError,
+    RequestBodyTooLarge,
+    configured_cors_origins,
+    mutation_authorized,
+    validate_repo_path,
+    validate_run_payload,
+    webhook_signature_valid,
+)
+
+
+async def _bounded_request_body(request: Any) -> bytes:
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > MAX_REQUEST_BYTES:
+            raise RequestBodyTooLarge("Payload is too large")
+        body.extend(chunk)
+    return bytes(body)
 from vulnflow.contracts.approval import (
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
@@ -44,10 +68,10 @@ try:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=configured_cors_origins(),
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-VulnFlow-Signature"],
     )
 
     @app.get("/health")
@@ -74,33 +98,67 @@ try:
             )
         return {"run_id": run_id, "report": report}
 
-    @app.post("/api/runs")
+    @app.post("/api/runs", status_code=202)
     async def api_trigger_run(request: Request) -> dict[str, Any]:
-        payload = await request.json()
-        return trigger_run(payload)
+        if not mutation_authorized(request.headers):
+            raise HTTPException(status_code=401, detail="Valid API bearer token required")
+        try:
+            payload = validate_run_payload(json.loads(await _bounded_request_body(request)))
+        except RequestBodyTooLarge as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except (ApiSecurityError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        try:
+            return enqueue_run(payload)
+        except RunQueueFull as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    @app.post("/api/webhooks")
+    @app.post("/api/webhooks", status_code=202)
     async def api_webhook(request: Request) -> dict[str, Any]:
-        payload = await request.json()
-        return handle_scan_webhook(payload)
+        try:
+            raw_body = await _bounded_request_body(request)
+        except RequestBodyTooLarge as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        if not webhook_signature_valid(
+            raw_body, request.headers.get("x-vulnflow-signature")
+        ):
+            raise HTTPException(status_code=401, detail="Invalid webhook signature")
+        try:
+            payload = validate_run_payload(json.loads(raw_body.decode("utf-8")))
+        except (ApiSecurityError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        try:
+            return enqueue_run(payload)
+        except RunQueueFull as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.get("/api/approvals", response_model=PendingApprovalListResponse)
     def api_list_approvals(repo: str = "") -> PendingApprovalListResponse:
+        try:
+            repo_path = validate_repo_path(repo) if repo else None
+        except ApiSecurityError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         return PendingApprovalListResponse(
-            plans=list_pending_approvals(repo_path=repo or None)
+            plans=list_pending_approvals(repo_path=repo_path)
         )
 
     @app.post("/api/approvals/{plan_id}", response_model=ApprovalDecisionResponse)
     def api_approval(
-        plan_id: str, body: ApprovalDecisionRequest
+        plan_id: str, body: ApprovalDecisionRequest, request: Request
     ) -> ApprovalDecisionResponse:
+        if not mutation_authorized(request.headers):
+            raise HTTPException(status_code=401, detail="Valid API bearer token required")
+        try:
+            repo_path = validate_repo_path(body.repo_path)
+        except ApiSecurityError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         return submit_approval(
             plan_id=plan_id,
             approved=body.approved,
             reviewer=body.reviewer,
             reviewer_group=body.reviewer_group,
             reason=body.reason,
-            repo_path=body.repo_path,
+            repo_path=repo_path,
             resume=body.resume,
         )
 
@@ -108,6 +166,10 @@ try:
     def api_graph(
         package: str = "npm:lodash", repo: str = "workspace"
     ) -> dict[str, Any]:
+        try:
+            repo = validate_repo_path(repo) if repo != "workspace" else "workspace"
+        except ApiSecurityError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         return get_graph_data(package=package, repo=repo)
 
     # Mount static frontend dashboard build if available
@@ -199,20 +261,39 @@ except ImportError:
                             send, 404, {"detail": f"Run {run_id} not found"}
                         )
                 elif path == "/api/runs" and method == "POST":
-                    body = await self._read_json(receive)
-                    result = trigger_run(body)
-                    await self._send_json(send, 200, result)
+                    headers = self._headers(scope)
+                    if not mutation_authorized(headers):
+                        await self._send_json(send, 401, {"error": "Unauthorized"})
+                        return
+                    raw = await self._read_body(receive)
+                    result = enqueue_run(
+                        validate_run_payload(json.loads(raw.decode("utf-8")))
+                    )
+                    await self._send_json(send, 202, result)
                 elif path == "/api/webhooks" and method == "POST":
-                    body = await self._read_json(receive)
-                    result = handle_scan_webhook(body)
-                    await self._send_json(send, 200, result)
+                    headers = self._headers(scope)
+                    raw = await self._read_body(receive)
+                    if not webhook_signature_valid(
+                        raw, headers.get("x-vulnflow-signature")
+                    ):
+                        await self._send_json(send, 401, {"error": "Invalid signature"})
+                        return
+                    result = enqueue_run(
+                        validate_run_payload(json.loads(raw.decode("utf-8")))
+                    )
+                    await self._send_json(send, 202, result)
                 elif path == "/api/approvals" and method == "GET":
                     repo_arg = params.get("repo", [""])[0]
                     result = PendingApprovalListResponse(
-                        plans=list_pending_approvals(repo_path=repo_arg or None)
+                        plans=list_pending_approvals(
+                            repo_path=validate_repo_path(repo_arg) if repo_arg else None
+                        )
                     )
                     await self._send_json(send, 200, result)
                 elif path.startswith("/api/approvals/") and method == "POST":
+                    if not mutation_authorized(self._headers(scope)):
+                        await self._send_json(send, 401, {"error": "Unauthorized"})
+                        return
                     plan_id = path.split("/")[-1]
                     body = await self._read_json(receive)
                     try:
@@ -226,13 +307,15 @@ except ImportError:
                         reviewer=request_model.reviewer,
                         reviewer_group=request_model.reviewer_group,
                         reason=request_model.reason,
-                        repo_path=request_model.repo_path,
+                        repo_path=validate_repo_path(request_model.repo_path),
                         resume=request_model.resume,
                     )
                     await self._send_json(send, 200, result)
                 elif path == "/api/graph" and method == "GET":
                     pkg = params.get("package", ["npm:lodash"])[0]
                     repo = params.get("repo", ["workspace"])[0]
+                    if repo != "workspace":
+                        repo = validate_repo_path(repo)
                     await self._send_json(
                         send, 200, get_graph_data(package=pkg, repo=repo)
                     )
@@ -245,6 +328,10 @@ except ImportError:
                         target_file = (
                             _UI_DIST / rel_path if rel_path else _UI_DIST / "index.html"
                         )
+                        target_file = target_file.resolve()
+                        if not target_file.is_relative_to(_UI_DIST.resolve()):
+                            await self._send_json(send, 404, {"error": "Not found"})
+                            return
                         if not target_file.is_file():
                             target_file = _UI_DIST / "index.html"
 
@@ -265,18 +352,40 @@ except ImportError:
                     await self._send_json(
                         send, 404, {"error": "Not found", "path": path}
                     )
+            except RunQueueFull as exc:
+                await self._send_json(send, 503, {"error": str(exc)})
+            except RequestBodyTooLarge as exc:
+                await self._send_json(send, 413, {"error": str(exc)})
+            except (ApiSecurityError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                await self._send_json(send, 422, {"error": str(exc)})
             except Exception as exc:
                 logger.exception("Error processing request: %s", exc)
                 await self._send_json(send, 500, {"error": str(exc)})
 
         async def _read_json(self, receive: Any) -> dict[str, Any]:
-            body = b""
+            body = await self._read_body(receive)
+            return json.loads(body.decode("utf-8")) if body else {}
+
+        async def _read_body(self, receive: Any) -> bytes:
+            body = bytearray()
             more_body = True
             while more_body:
                 message = await receive()
-                body += message.get("body", b"")
+                if message.get("type") == "http.disconnect":
+                    raise ApiSecurityError("Request disconnected")
+                chunk = message.get("body", b"")
+                if len(body) + len(chunk) > MAX_REQUEST_BYTES:
+                    raise RequestBodyTooLarge("Payload is too large")
+                body.extend(chunk)
                 more_body = message.get("more_body", False)
-            return json.loads(body.decode("utf-8")) if body else {}
+            return bytes(body)
+
+        @staticmethod
+        def _headers(scope: Any) -> dict[str, str]:
+            return {
+                key.decode("latin-1").lower(): value.decode("latin-1")
+                for key, value in scope.get("headers", [])
+            }
 
         async def _send_json(self, send: Any, status: int, data: Any) -> None:
             if isinstance(data, BaseModel):
@@ -290,10 +399,15 @@ except ImportError:
             headers = [
                 (b"content-type", content_type.encode("utf-8")),
                 (b"content-length", str(len(body)).encode("utf-8")),
-                (b"access-control-allow-origin", b"*"),
-                (b"access-control-allow-methods", b"GET, POST, OPTIONS, PUT, DELETE"),
-                (b"access-control-allow-headers", b"Content-Type, Authorization"),
+                (b"access-control-allow-methods", b"GET, POST, OPTIONS"),
+                (
+                    b"access-control-allow-headers",
+                    b"Content-Type, Authorization, X-VulnFlow-Signature",
+                ),
             ]
+            origins = configured_cors_origins()
+            if origins:
+                headers.append((b"access-control-allow-origin", origins[0].encode("utf-8")))
             await send(
                 {"type": "http.response.start", "status": status, "headers": headers}
             )

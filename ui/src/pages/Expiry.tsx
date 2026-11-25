@@ -41,6 +41,7 @@ export const Expiry: React.FC = () => {
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto">
+      <p role="status" className="text-xs text-slate-600">Example records. Live expiry monitoring is unavailable in this view.</p>
       <div>
         <h2 className="text-xl font-bold tracking-tight text-slate-900 flex items-center gap-2">
           <IconClock className="w-5 h-5 text-slate-700" />

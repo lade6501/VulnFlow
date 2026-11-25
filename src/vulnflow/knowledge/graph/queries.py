@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from vulnflow.adapters.ecosystem.maven import MavenAdapter
 from vulnflow.knowledge.graph.build_from_tree import (
     DependencyGraph,
     build_graph_from_manifest,
@@ -16,6 +17,26 @@ from vulnflow.knowledge.graph.build_from_tree import (
 )
 
 logger = logging.getLogger("vulnflow.knowledge.graph.queries")
+
+
+def _build_graph_for_repo(repo_path: Path, ecosystem: str) -> DependencyGraph | None:
+    """Build the best available direct-dependency graph for a repository ecosystem."""
+    normalized = ecosystem.lower()
+    if normalized == "maven" and (repo_path / "pom.xml").exists():
+        graph = DependencyGraph()
+        for package, version in MavenAdapter.parse_dependencies(
+            repo_path / "pom.xml"
+        ).items():
+            if ":" not in package:
+                continue
+            full_package = f"maven:{package}"
+            graph.get_or_create_node(full_package, version=version, is_direct=True)
+            graph.get_or_create_node(package, version=version, is_direct=True)
+        return graph
+    package_json = repo_path / "package.json"
+    if package_json.exists():
+        return build_graph_from_manifest(package_json, ecosystem=ecosystem)
+    return None
 
 
 def find_root_cause(
@@ -61,10 +82,7 @@ def find_root_cause(
     # 2. Build graph from repo if graph is not provided
     active_graph = graph
     if active_graph is None and repo_path:
-        r_path = Path(repo_path)
-        pkg_json = r_path / "package.json"
-        if pkg_json.exists():
-            active_graph = build_graph_from_manifest(pkg_json, ecosystem=ecosystem)
+        active_graph = _build_graph_for_repo(Path(repo_path), ecosystem)
 
     # 3. Query the dependency graph
     if active_graph:
@@ -115,10 +133,7 @@ def find_blast_radius(
     active_graph = graph
     if active_graph is None:
         if repo_path:
-            r_path = Path(repo_path)
-            pkg_json = r_path / "package.json"
-            if pkg_json.exists():
-                active_graph = build_graph_from_manifest(pkg_json, ecosystem=ecosystem)
+            active_graph = _build_graph_for_repo(Path(repo_path), ecosystem)
         if active_graph is None:
             active_graph = get_active_graph()
 

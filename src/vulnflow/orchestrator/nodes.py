@@ -8,10 +8,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
-import subprocess
 from pathlib import Path
 from typing import Any
 
+from vulnflow.adapters.ecosystem.maven import MavenAdapter
 from vulnflow.adapters.ecosystem.npm import NPMAdapter
 from vulnflow.adapters.ecosystem.pip import PipAdapter
 from vulnflow.adapters.input.gitleaks import GitleaksAdapter
@@ -30,6 +30,7 @@ from vulnflow.contracts.remediation_plan import (
     RemediationAction,
     RemediationPlan,
     RiskTier,
+    VerificationResult,
 )
 from vulnflow.contracts.state import VulnFlowState
 from vulnflow.core.dedupe import DeduplicationEngine
@@ -48,6 +49,17 @@ from vulnflow.reporting.pr_comment import format_campaign_pr_body, format_pr_bod
 from vulnflow.store.run_store import default_run_store
 
 logger = logging.getLogger("vulnflow.orchestrator.nodes")
+
+
+def _require_tool_status(
+    result: dict[str, Any], expected: str, operation: str
+) -> dict[str, Any]:
+    """Fail the workflow when a side-effect tool did not confirm its action."""
+    if result.get("status") != expected:
+        raise RuntimeError(
+            f"{operation} was not confirmed: {result.get('error') or result}"
+        )
+    return result
 
 
 def _campaign_id(plan: RemediationPlan) -> str:
@@ -158,7 +170,9 @@ def ingest_node(state: VulnFlowState) -> VulnFlowState:
     with trace_span("orchestrator.node.ingest", {"run_id": state.run_id}):
         findings: list[Finding] = []
 
-        if state.report_path and Path(state.report_path).exists():
+        if state.report_path:
+            if not Path(state.report_path).is_file():
+                raise ValueError("The submitted scanner report does not exist")
             s_name = (state.scanner or "").lower()
             rep_lower = str(state.report_path).lower()
 
@@ -198,20 +212,14 @@ def ingest_node(state: VulnFlowState) -> VulnFlowState:
             else:
                 adapter = TrivyAdapter(default_ecosystem=state.ecosystem)
 
-            try:
-                findings = adapter.parse_file(state.report_path, repo=state.repo_path)
-            except (OSError, ValueError, KeyError) as exc:
-                logger.warning(
-                    "Adapter %s failed to parse %s: %s; using scanner tool",
-                    adapter.__class__.__name__,
-                    state.report_path,
-                    exc,
-                )
-
-        if not findings:
-            raw_scan_results = scan_server.scan_run(
+            findings = adapter.parse_file(state.report_path, repo=state.repo_path)
+        else:
+            scan = scan_server.scan_verify(
                 repo=state.repo_path, scanner=state.scanner
             )
+            if not scan.get("complete"):
+                raise RuntimeError(f"Initial scan unavailable: {scan.get('error') or 'missing scan evidence'}")
+            raw_scan_results = scan.get("findings", [])
             state.raw_findings = raw_scan_results
             for item in raw_scan_results:
                 findings.append(Finding.from_dict(item))
@@ -621,27 +629,31 @@ def approve_node(state: VulnFlowState) -> VulnFlowState:
 
 
 def fix_node(state: VulnFlowState) -> VulnFlowState:
-    """Apply real package version bumps to repository manifest on isolated fix branches."""
+    """Apply remediation in a disposable worktree without changing the caller's checkout."""
     state.current_node = "fix"
+    repo = Path(state.repo_path).resolve()
+    if not (repo / ".git").exists():
+        raise RuntimeError("Repository is not a git checkout")
+    with build_server.sandbox.isolated_checkout(repo) as worktree:
+        return _fix_checkout(state, worktree)
+
+
+def _fix_checkout(state: VulnFlowState, repo_p: Path) -> VulnFlowState:
     with trace_span("orchestrator.node.fix", {"run_id": state.run_id}):
         patches: list[dict[str, Any]] = []
-        repo_p = Path(state.repo_path)
+        worktree = str(repo_p)
+        base_branch = build_server.sandbox.checkout_revision(repo_p)
 
-        # Detect primary base branch (usually main or master)
-        base_branch = "main"
-        if (repo_p / ".git").exists():
-            try:
-                res = subprocess.run(
-                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                    cwd=str(repo_p),
-                    stdout=subprocess.PIPE,
-                    text=True,
-                    check=False,
-                )
-                if res.returncode == 0 and res.stdout.strip():
-                    base_branch = res.stdout.strip()
-            except (subprocess.SubprocessError, OSError):
-                logger.debug("Failed resolving base branch via git rev-parse")
+        def _create_branch(branch: str) -> None:
+            _require_tool_status(
+                git_server.git_branch(
+                    branch, worktree, base_branch=base_branch,
+                    replace_existing=branch in state.created_branches,
+                ),
+                "created", f"Create branch {branch}",
+            )
+            if branch not in state.created_branches:
+                state.created_branches.append(branch)
 
         def _apply_dependency_bump(
             p: RemediationPlan, branch_name: str, is_campaign: bool = False
@@ -652,6 +664,9 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
 
             pkg_json = repo_p / "package.json"
             req_txt = repo_p / "requirements.txt"
+            pom_xml = repo_p / "pom.xml"
+            if any(path.is_symlink() for path in (pkg_json, req_txt, pom_xml)):
+                raise RuntimeError("Refusing to modify a symlinked dependency manifest")
 
             clean_name = pkg_target.split(":")[-1]
             is_npm_explicit = "npm:" in p.root_cause_id or (
@@ -665,16 +680,30 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
                     and ("pip:" in p.target_package or "python:" in p.target_package)
                 )
             )
+            is_maven_explicit = "maven:" in p.root_cause_id or bool(
+                p.target_package and "maven:" in p.target_package
+            )
 
-            if is_python_explicit and req_txt.exists():
+            if is_maven_explicit and pom_xml.exists():
+                is_maven = True
+                is_python = False
+            elif is_python_explicit and req_txt.exists():
+                is_maven = False
                 is_python = True
             elif is_npm_explicit and pkg_json.exists():
+                is_maven = False
                 is_python = False
             elif req_txt.exists() and not pkg_json.exists():
+                is_maven = False
                 is_python = True
+            elif pom_xml.exists() and not pkg_json.exists() and not req_txt.exists():
+                is_maven = True
+                is_python = False
             elif pkg_json.exists() and not req_txt.exists():
+                is_maven = False
                 is_python = False
             else:
+                is_maven = False
                 pkg_json_content = (
                     pkg_json.read_text(encoding="utf-8") if pkg_json.exists() else ""
                 )
@@ -682,7 +711,17 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
                     f'"{clean_name}"' not in pkg_json_content and req_txt.exists()
                 )
 
-            if p.action == RemediationAction.REPLACE:
+            if is_maven and pom_xml.exists():
+                if p.action is RemediationAction.REPLACE:
+                    raise RuntimeError("Maven dependency replacement requires manual review")
+                target_file = "pom.xml"
+                try:
+                    _, diff_content = MavenAdapter.bump_dependency(
+                        pom_xml, pkg_target, p.target_version or "latest"
+                    )
+                except (OSError, ValueError, KeyError) as exc:
+                    logger.warning("MavenAdapter bump failed: %s", exc)
+            elif p.action == RemediationAction.REPLACE:
                 old_pkg = p.root_cause_id.replace("PKG-", "")
                 new_pkg = p.target_package or "replacement"
                 if not is_python and pkg_json.exists():
@@ -711,9 +750,13 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
                     logger.warning("NPMAdapter bump failed: %s; using patch diff", exc)
 
             if not diff_content:
-                diff_content = f'--- {target_file}\n+++ {target_file}\n- "{p.target_package}": "old"\n+ "{p.target_package}": "{p.target_version}"'
+                raise RuntimeError(f"No dependency change was produced for {target_file}")
 
-            res = git_server.git_patch(target_file, diff_content, state.repo_path)
+            res = _require_tool_status(
+                git_server.git_patch(target_file, diff_content, worktree),
+                "applied",
+                f"Patch {target_file}",
+            )
             state.append_audit(
                 "PATCH_APPLIED",
                 "git_server",
@@ -734,6 +777,19 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
                 "is_campaign": is_campaign,
             }
 
+        def _update_npm_lockfile(branch_patches: list[dict[str, Any]]) -> bool:
+            if not any(patch["file"] == "package.json" for patch in branch_patches):
+                return False
+            update = build_server.npm_update_lock(worktree)
+            if update.get("status") in {"missing", "unchanged"}:
+                return False
+            _require_tool_status(update, "updated", "Update npm lockfile")
+            state.append_audit(
+                "LOCKFILE_UPDATED", "build_server",
+                {"branch": branch_patches[0]["branch"], "file": update["file"]},
+            )
+            return True
+
         # Partition plans by remediation type
         dep_plans = [
             p
@@ -748,11 +804,7 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
         # Multi-dependency campaign batching (Capability 2)
         if len(dep_plans) > 1:
             campaign_branch = f"vulnflow/campaign-{state.run_id[:8]}"
-            if campaign_branch not in state.created_branches:
-                state.created_branches.append(campaign_branch)
-            git_server.git_branch(
-                campaign_branch, state.repo_path, base_branch=base_branch
-            )
+            _create_branch(campaign_branch)
             state.append_audit(
                 "BRANCH_CREATED",
                 "git_server",
@@ -765,12 +817,17 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
                 )
                 patches.append(patch_record)
 
+            _update_npm_lockfile(patches)
             pkgs_str = ", ".join(
                 p.target_package or p.root_cause_id.replace("PKG-", "")
                 for p in dep_plans
             )
             commit_msg = f"fix(deps): campaign remediation for {pkgs_str}"
-            git_server.git_commit(commit_msg, state.repo_path)
+            _require_tool_status(
+                git_server.git_commit(commit_msg, worktree),
+                "committed",
+                f"Commit branch {campaign_branch}",
+            )
             state.append_audit(
                 "COMMIT_CREATED",
                 "git_server",
@@ -778,16 +835,14 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
             )
 
             if base_branch:
-                git_server.git_checkout(base_branch, state.repo_path)
+                git_server.git_checkout(base_branch, worktree)
 
         elif len(dep_plans) == 1:
             p = dep_plans[0]
             branch_name = (
                 f"vulnflow/fix-{p.root_cause_id.replace(':', '-').replace('PKG-', '')}"
             )
-            if branch_name not in state.created_branches:
-                state.created_branches.append(branch_name)
-            git_server.git_branch(branch_name, state.repo_path, base_branch=base_branch)
+            _create_branch(branch_name)
             state.append_audit(
                 "BRANCH_CREATED",
                 "git_server",
@@ -796,8 +851,14 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
 
             patch_record = _apply_dependency_bump(p, branch_name, is_campaign=False)
             commit_msg = f"fix(deps): bump {p.target_package} to {p.target_version}"
-            git_server.git_commit(
-                commit_msg, state.repo_path, file_path=patch_record["file"]
+            lockfile_updated = _update_npm_lockfile([patch_record])
+            _require_tool_status(
+                git_server.git_commit(
+                    commit_msg, worktree,
+                    file_path=None if lockfile_updated else patch_record["file"],
+                ),
+                "committed",
+                f"Commit branch {branch_name}",
             )
             state.append_audit(
                 "COMMIT_CREATED",
@@ -807,15 +868,13 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
             patches.append(patch_record)
 
             if base_branch:
-                git_server.git_checkout(base_branch, state.repo_path)
+                git_server.git_checkout(base_branch, worktree)
 
         # Secret rotation plans
         for p in rotate_plans:
             clean_name = p.root_cause_id.replace(":", "-").replace("PKG-", "")
             branch_name = f"vulnflow/fix-{clean_name}"
-            if branch_name not in state.created_branches:
-                state.created_branches.append(branch_name)
-            git_server.git_branch(branch_name, state.repo_path, base_branch=base_branch)
+            _create_branch(branch_name)
             state.append_audit(
                 "BRANCH_CREATED",
                 "git_server",
@@ -828,21 +887,13 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
                     fpath = ev["file_path"]
                     files_map.setdefault(fpath, []).append(ev)
 
-            if not files_map:
-                files_map["javascript_sast_vulnerabilities.js"] = [
-                    {"rule_id": p.root_cause_id.replace("secret:", "")}
-                ]
-
             total_modified = 0
             diff_summaries: list[str] = []
 
             for file_rel, items in files_map.items():
                 target_file_path = repo_p / file_rel
-                if not target_file_path.exists():
-                    matches = list(repo_p.rglob(Path(file_rel).name))
-                    if matches:
-                        target_file_path = matches[0]
-                        file_rel = str(target_file_path.relative_to(repo_p))
+                if Path(file_rel).is_absolute() or target_file_path.resolve() != target_file_path:
+                    raise RuntimeError("Refusing to modify a secret finding outside its tracked repository path")
 
                 if target_file_path.exists():
                     try:
@@ -865,10 +916,14 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
                             diff_summaries.append(
                                 f"Migrated {len(items)} credential(s) in {file_rel}"
                             )
-                            git_server.git_patch(
-                                file_rel,
-                                f"--- {file_rel}\n+++ {file_rel}\nMigrated {len(items)} credentials",
-                                state.repo_path,
+                            _require_tool_status(
+                                git_server.git_patch(
+                                    file_rel,
+                                    f"--- {file_rel}\n+++ {file_rel}\nMigrated {len(items)} credentials",
+                                    worktree,
+                                ),
+                                "applied",
+                                f"Patch {file_rel}",
                             )
                             state.append_audit(
                                 "PATCH_APPLIED",
@@ -890,7 +945,11 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
             commit_msg = (
                 "fix(security): rotate exposed credentials and migrate to env vars"
             )
-            git_server.git_commit(commit_msg, state.repo_path)
+            _require_tool_status(
+                git_server.git_commit(commit_msg, worktree),
+                "committed",
+                f"Commit branch {branch_name}",
+            )
             state.append_audit(
                 "COMMIT_CREATED",
                 "git_server",
@@ -909,7 +968,7 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
             )
 
             if base_branch:
-                git_server.git_checkout(base_branch, state.repo_path)
+                git_server.git_checkout(base_branch, worktree)
 
         state.patches = patches
         state.append_audit(
@@ -932,7 +991,11 @@ def test_node(state: VulnFlowState) -> VulnFlowState:
                 continue
 
             res = build_server.build_test(state.repo_path, branch, state.ecosystem)
-            is_passed = res.get("passed", True) and res.get("build_clean", True)
+            is_passed = (
+                res.get("passed", False)
+                and res.get("build_clean", False)
+                and res.get("verification_available", True)
+            )
             state.append_audit(
                 "BUILD_TEST_EXECUTED",
                 "build_server",
@@ -972,9 +1035,11 @@ def test_node(state: VulnFlowState) -> VulnFlowState:
                         retest_res = build_server.build_test(
                             state.repo_path, branch, state.ecosystem
                         )
-                        retest_passed = retest_res.get(
-                            "passed", True
-                        ) and retest_res.get("build_clean", True)
+                        retest_passed = (
+                            retest_res.get("passed", False)
+                            and retest_res.get("build_clean", False)
+                            and retest_res.get("verification_available", True)
+                        )
                         if retest_passed:
                             is_passed = True
                             res = retest_res
@@ -991,12 +1056,14 @@ def test_node(state: VulnFlowState) -> VulnFlowState:
 
                     # 2. If refactoring was not applied or test still failed, trigger traditional failure analysis
                     if not is_passed:
+                        previous_version = plan.target_version
                         default_fixer_agent.analyze_failure_and_correct(
                             plan=plan,
                             test_output=res.get("output", ""),
                             retry_count=state.retry_count,
                             max_retries=state.max_retries,
                         )
+                        res["retry_available"] = plan.target_version != previous_version
                         state.append_audit(
                             "SELF_CORRECTION_TRIGGERED",
                             "fixer_agent",
@@ -1008,8 +1075,9 @@ def test_node(state: VulnFlowState) -> VulnFlowState:
                             },
                         )
 
-            tested_branches[branch] = res
-            test_results.append(res)
+            safe_result = {key: value for key, value in res.items() if key != "output"}
+            tested_branches[branch] = safe_result
+            test_results.append(safe_result)
 
         state.test_results = test_results
         state.append_audit(
@@ -1019,36 +1087,30 @@ def test_node(state: VulnFlowState) -> VulnFlowState:
 
 
 def pr_node(state: VulnFlowState) -> VulnFlowState:
-    """Commit changes on each fix branch and open single or campaign pull requests."""
+    """Open pull requests for verified commits."""
     state.current_node = "pr"
     with trace_span("orchestrator.node.pr", {"run_id": state.run_id}):
         prs: list[dict[str, Any]] = []
-        repo_p = Path(state.repo_path)
-        base_branch = "main"
-
-        if (repo_p / ".git").exists():
-            try:
-                res = subprocess.run(
-                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                    cwd=str(repo_p),
-                    stdout=subprocess.PIPE,
-                    text=True,
-                    check=False,
-                )
-                if res.returncode == 0 and res.stdout.strip():
-                    base_branch = res.stdout.strip()
-            except (subprocess.SubprocessError, OSError):
-                logger.debug("Failed resolving base branch via git rev-parse")
-
         # Group patches by branch to support both single-fix and campaign PRs
         branch_to_patches: dict[str, list[dict[str, Any]]] = {}
         for patch in state.patches:
             branch_to_patches.setdefault(patch["branch"], []).append(patch)
 
         for branch, b_patches in branch_to_patches.items():
+            verification = next(
+                (
+                    result for result in state.verification_results
+                    if result.get("branch") == branch and result.get("verified") is True
+                ),
+                {},
+            )
+            if not verification.get("revision"):
+                state.error = "Verified commit evidence is missing for a remediation branch"
+                continue
             branch_plan_ids = {p["plan_id"] for p in b_patches}
             branch_plans = [p for p in state.approved_plans if p.id in branch_plan_ids]
             if not branch_plans:
+                state.error = "No approved plan matched the remediation branch"
                 continue
 
             # Confirm registry availability before PR for dependency packages (F14)
@@ -1069,7 +1131,7 @@ def pr_node(state: VulnFlowState) -> VulnFlowState:
                     reg_check = registry_check(
                         plan.target_package, plan.target_version, plan_eco
                     )
-                    if not reg_check.get("available", True):
+                    if not reg_check.get("confirmed", False):
                         logger.warning(
                             "Registry check rejected PR: %s not in registry",
                             plan.target_version,
@@ -1078,6 +1140,7 @@ def pr_node(state: VulnFlowState) -> VulnFlowState:
                             "REGISTRY_CHECK_FAILED", "registry_server", reg_check
                         )
                         registry_rejected = True
+                        state.error = "Dependency registry did not confirm an intended version"
                         break
             if registry_rejected:
                 continue
@@ -1095,10 +1158,9 @@ def pr_node(state: VulnFlowState) -> VulnFlowState:
                     " and more" if len(target_pkgs) > 3 else ""
                 )
                 title = f"fix(deps): campaign remediation for {pkgs_preview} [VulnFlow]"
-                verification = getattr(state, "verification_results", None)
-                ver_dict = verification[0] if verification else None
                 pr_body = format_campaign_pr_body(
-                    plans=branch_plans, verification=ver_dict
+                    plans=branch_plans,
+                    verification=VerificationResult.from_dict(verification),
                 )
             else:
                 plan = branch_plans[0]
@@ -1116,7 +1178,25 @@ def pr_node(state: VulnFlowState) -> VulnFlowState:
                 title=title,
                 body=pr_body,
                 repo_dir=state.repo_path,
+                expected_revision=verification["revision"],
             )
+            if pr_res.get("status") != "opened" or not pr_res.get("pr_url"):
+                state.append_audit(
+                    "PR_CREATION_FAILED",
+                    "git_server",
+                    {
+                        "branch": branch,
+                        "status": pr_res.get("status"),
+                        "error": pr_res.get("error"),
+                    },
+                )
+                state.terminal_status = "error"
+                state.exit_code = 1
+                state.error = str(
+                    pr_res.get("error") or "Pull request creation was not confirmed"
+                )
+                state.blocking_reason = state.error
+                continue
             prs.append(pr_res)
             state.append_audit(
                 "PR_CREATED",
@@ -1131,11 +1211,14 @@ def pr_node(state: VulnFlowState) -> VulnFlowState:
                 },
             )
 
-        # Restore working tree back to initial base branch
-        if base_branch:
-            git_server.git_checkout(base_branch, state.repo_path)
-
         state.pull_requests = prs
+        if prs and len(prs) == len(branch_to_patches):
+            state.terminal_status = "completed"
+            state.exit_code = 0
+        else:
+            state.terminal_status = "error"
+            state.exit_code = 1
+            state.blocking_reason = state.error or "No pull request creation was confirmed"
         return state
 
 
@@ -1143,38 +1226,91 @@ def verify_node(state: VulnFlowState) -> VulnFlowState:
     """Rescan patched branch and verify finding resolution using VerifierAgent."""
     state.current_node = "verify"
     with trace_span("orchestrator.node.verify", {"run_id": state.run_id}):
-        ver_res = default_verifier_agent.verify_remediation(
-            repo_path=state.repo_path,
-            plans=state.plans,
-            before_findings=state.findings,
-            test_results=state.test_results,
-            ecosystem=state.ecosystem,
-        )
+        if state.mode == "report":
+            assessment = VerificationResult(
+                verified=False,
+                rescan_clean=False,
+                policy_recheck_passed=True,
+                build_success=False,
+                tests_passed=False,
+                details="Assessment only: no patch, build, or post-fix rescan was executed.",
+            )
+            state.verification_results = [assessment.to_dict()]
+            state.terminal_status = "completed"
+            state.exit_code = 0
+            state.append_audit(
+                "ASSESSMENT_COMPLETED", "verifier_agent", assessment.to_dict()
+            )
+            return state
 
-        for p in state.plans:
-            p.verification = ver_res
+        branch_to_plan_ids: dict[str, set[str]] = {}
+        for patch in state.patches:
+            branch = patch.get("branch")
+            plan_id = patch.get("plan_id")
+            if branch and plan_id:
+                branch_to_plan_ids.setdefault(str(branch), set()).add(str(plan_id))
 
-        state.verification_results = [ver_res.to_dict()]
+        results: list[dict[str, Any]] = []
+        for branch, plan_ids in branch_to_plan_ids.items():
+            branch_plans = [plan for plan in state.approved_plans if plan.id in plan_ids]
+            finding_ids = {
+                finding_id
+                for plan in branch_plans
+                for finding_id in plan.finding_ids
+            }
+            branch_findings = [
+                finding for finding in state.findings if finding.id in finding_ids
+            ]
+            branch_tests = [
+                result
+                for result in state.test_results
+                if result.get("branch") == branch
+            ]
+            ver_res = default_verifier_agent.verify_remediation(
+                repo_path=state.repo_path,
+                plans=branch_plans,
+                before_findings=branch_findings,
+                test_results=branch_tests,
+                ecosystem=state.ecosystem,
+                scanner=state.scanner,
+                branch=branch,
+            )
+            results.append({"branch": branch, **ver_res.to_dict()})
+            state.append_audit(
+                "RESCAN_EXECUTED", "scan_server",
+                {"branch": branch, "revision": ver_res.revision, "success": ver_res.scan_complete},
+            )
+            for plan in branch_plans:
+                plan.verification = ver_res
+            for plan in state.plans:
+                if plan.id in plan_ids:
+                    plan.verification = ver_res
 
-        # Strict invariant: a failed verify is never reported as success (F22)
-        if (
-            not ver_res.verified
-            and state.mode != "report"
-            and state.terminal_status != "pending_approval"
-        ):
+        state.verification_results = results
+        verified = bool(results) and all(result["verified"] for result in results)
+
+        # Strict invariant: missing or failed evidence is never reported as success (F22)
+        if not verified and state.terminal_status != "pending_approval":
             state.terminal_status = "failed_verification"
             state.exit_code = 30
-            state.blocking_reason = f"Verification failed: {ver_res.details}"
+            details = "; ".join(
+                result["details"] or "verification failed" for result in results
+            ) or "No patched branch was available for verification"
+            state.blocking_reason = f"Verification failed: {details}"
             state.append_audit(
-                "VERIFICATION_FAILED", "verifier_agent", ver_res.to_dict()
+                "VERIFICATION_FAILED",
+                "verifier_agent",
+                {"branches": state.verification_results, "details": details},
             )
         else:
             if state.terminal_status not in ("pending_approval", "blocked_policy"):
-                state.terminal_status = "completed"
+                state.terminal_status = (
+                    "completed" if state.mode == "dry-run" else "verified"
+                )
                 state.exit_code = 0
-            state.append_audit(
-                "VERIFICATION_COMPLETED", "verifier_agent", ver_res.to_dict()
-            )
+            state.append_audit("VERIFICATION_COMPLETED", "verifier_agent", {
+                "branches": state.verification_results
+            })
 
         return state
 

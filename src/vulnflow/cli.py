@@ -423,10 +423,30 @@ def cmd_fix(args: argparse.Namespace) -> int:
 
 def cmd_verify(args: argparse.Namespace) -> int:
     """Rescan a branch and confirm finding resolution."""
-    logger.info("Verifying branch %s against baseline findings", args.branch)
-    state = VulnFlowState(repo_path=args.repo, mode="report")
-    result = run_workflow(state)
-    return result.exit_code
+    from vulnflow.agents.verifier import default_verifier_agent
+    from vulnflow.mcp_servers.build_server import build_server
+    from vulnflow.orchestrator.nodes import ingest_node
+
+    state = VulnFlowState(
+        repo_path=args.repo, report_path=args.report, scanner=args.scanner,
+        ecosystem=args.ecosystem, mode="report",
+    )
+    try:
+        ingest_node(state)
+    except (OSError, ValueError, RuntimeError, KeyError) as exc:
+        logger.error("Could not load the verification baseline: %s", exc)
+        return 1
+    if not state.findings:
+        logger.error("Verification requires findings in the baseline report")
+        return 30
+    checks = build_server.build_test(args.repo, args.branch, args.ecosystem)
+    result = default_verifier_agent.verify_remediation(
+        repo_path=args.repo, branch=args.branch, scanner=args.scanner,
+        ecosystem=args.ecosystem, plans=[], before_findings=state.findings,
+        test_results=[checks],
+    )
+    print(result.details or ("Verification passed" if result.verified else "Verification failed"))
+    return 0 if result.verified else 30
 
 
 def cmd_approve(args: argparse.Namespace) -> int:
@@ -838,6 +858,9 @@ def main(argv: list[str] | None = None) -> int:
     p_verify = subparsers.add_parser("verify", help="Verify that a branch resolves target findings")
     p_verify.add_argument("--branch", required=True, help="Remediated branch name")
     p_verify.add_argument("--repo", default=".", help="Repository directory path")
+    p_verify.add_argument("--report", required=True, help="Pre-remediation scanner report")
+    p_verify.add_argument("--scanner", default="trivy", help="Scanner to use for the baseline and rescan")
+    p_verify.add_argument("--ecosystem", default="npm", help="Build and test ecosystem")
     p_verify.set_defaults(func=cmd_verify)
 
     # approve

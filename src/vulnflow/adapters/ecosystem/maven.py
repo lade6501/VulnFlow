@@ -60,29 +60,33 @@ class MavenAdapter:
             return False, ""
 
         original_content = pom_path.read_text(encoding="utf-8")
-        clean_target = package.split(":")[-1]
+        coordinate = package.removeprefix("maven:").split(":")
+        if len(coordinate) not in (1, 2) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", target_version):
+            return False, ""
+        group = coordinate[0] if len(coordinate) == 2 else None
+        artifact = coordinate[-1]
 
-        # Use regex to replace version while preserving formatting and XML structure
-        # Matches <artifactId>clean_target</artifactId> ... <version>old</version>
-        pattern = re.compile(
-            rf"(<artifactId>\s*{re.escape(clean_target)}\s*</artifactId>[\s\S]*?<version>)([^<]+)(</version>)",
-            re.IGNORECASE,
-        )
-
-        match = pattern.search(original_content)
-        if not match:
-            # Try alternate ordering: <version> before <artifactId>
-            pattern_rev = re.compile(
-                rf"(<version>)([^<]+)(</version>[\s\S]*?<artifactId>\s*{re.escape(clean_target)}\s*</artifactId>)",
-                re.IGNORECASE,
-            )
-            match_rev = pattern_rev.search(original_content)
-            if not match_rev:
-                logger.warning("Could not locate dependency %s in %s", package, pom_path)
-                return False, ""
-            new_content = pattern_rev.sub(rf"\g<1>{target_version}\g<3>", original_content, count=1)
-        else:
-            new_content = pattern.sub(rf"\g<1>{target_version}\g<3>", original_content, count=1)
+        # Preserve formatting by editing the version inside one matching dependency block.
+        block_pattern = re.compile(r"<!--.*?-->|<dependency\s*>.*?</dependency\s*>", re.DOTALL)
+        versions = []
+        for block in block_pattern.finditer(original_content):
+            if block.group().startswith("<!--"):
+                continue
+            try:
+                entry = ET.fromstring(block.group())
+            except ET.ParseError:
+                continue
+            if (entry.findtext("artifactId") or "").strip() != artifact:
+                continue
+            if group is not None and (entry.findtext("groupId") or "").strip() != group:
+                continue
+            version = re.search(r"<version>\s*([^<>\s]+)\s*</version>", block.group())
+            if version and version.group(1) == (entry.findtext("version") or "").strip():
+                versions.append((block.start() + version.start(1), block.start() + version.end(1)))
+        if len(versions) != 1:
+            return False, ""
+        start, end = versions[0]
+        new_content = original_content[:start] + target_version + original_content[end:]
 
         if new_content == original_content:
             return False, ""
