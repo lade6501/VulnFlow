@@ -166,10 +166,10 @@ def test_renderer_golden_hashes() -> None:
     html_hash = hashlib.sha256(generate_html_report(report).encode()).hexdigest()
     assert (
         markdown_hash
-        == "4e5b5f706e01cf529eba5f75530fe7315a7adfcef3126b199ccdbc19009f87cd"
+        == "810717436348689707844241174f0d293c28482f2f854d1b539357759d18f680"
     )
     assert (
-        html_hash == "8c3c4a63311ecdf274230df8419ef072fb6d6a07c2c0bae76a028c8bc2ee722a"
+        html_hash == "c1eee330fbfd945d5218678e0fd651bd151311c894170f1231c3e6530e6c963a"
     )
 
 
@@ -428,6 +428,11 @@ def test_secret_and_pii_finding_report() -> None:
     assert report.root_causes[0].package == "[REDACTED]"
     assert r"\[REDACTED\]" in md
     assert "[REDACTED]" in html
+    assert html.index('id="actions"') < html.index('id="credential-exposure"')
+    assert html[html.rfind("<section"):].startswith('<section id="credential-exposure"')
+    assert "Credentials &amp; Secret Exposure Alert" in html
+    assert 'aria-label="Redacted credential locations"' in html
+    assert "View 1 flagged location" in html
 
 
 def test_failed_remediation_and_test_failure() -> None:
@@ -514,10 +519,10 @@ def test_applied_fixes_are_prominently_reported() -> None:
     html = generate_html_report(report)
 
     # Check section ordering
-    assert "## B. Remediation Actions Performed" in md
-    assert "## D. AI Investigations and Decisions" in md
-    assert md.index("## B. Remediation Actions Performed") < md.index(
-        "## D. AI Investigations and Decisions"
+    assert "## Remediation Actions Performed" in md
+    assert "## AI Investigations and Decisions" in md
+    assert md.index("## Remediation Actions Performed") < md.index(
+        "## AI Investigations and Decisions"
     )
 
     # Check applied fix content
@@ -546,7 +551,7 @@ def test_real_pr_details_appear_when_available() -> None:
     md = generate_markdown_report(report)
     html = generate_html_report(report)
 
-    assert "## C. Pull Requests Created" in md
+    assert "## Pull Requests Created" in md
     assert "PR #7" in md or "PR" in md
     assert "https://github.com/acme/sample/pull/7" in md
     assert "vulnflow/fix" in md
@@ -602,6 +607,7 @@ def test_approval_lists_cannot_dominate_main_report() -> None:
     # Must have grouped summary
     assert "Governance Authorization Gate" in md
     assert "vulnflow approve --all" in md
+    assert md.index("## Approval and Developer Actions") < md.index("## AI Investigations and Decisions")
 
     # Must stay bounded under 8000 chars without cutting off
     assert len(md) <= 8000
@@ -696,13 +702,16 @@ def test_executive_and_technical_report_split(tmp_path: Path) -> None:
     assert "Executive Security Intelligence Report" in exec_html
     assert "Open Technical Remediation Report" in exec_html
     assert "Top Strategic AI Decisions" in exec_html
-    assert "<details" not in exec_html  # No root-cause collapse lists in executive brief!
+    assert '<details class="root-accordion">' not in exec_html
+    assert "<details>" in exec_html
 
     # Technical report has technical title, link back to executive, and collapsible details
-    assert "Technical Remediation & Evidence Report" in tech_html
+    assert "Technical Remediation &amp; Evidence Report" in tech_html
     assert "Open Executive Report" in tech_html
-    assert "<details><summary>" in tech_html
-    assert "<details open>" not in tech_html  # Collapsed by default
+    assert '<details class="root-accordion"><summary>' in tech_html
+    assert "View execution details and provenance" in tech_html
+    assert "<details open" not in tech_html
+    assert "prefers-reduced-motion: reduce" in tech_html
 
     # Dual write produces both files
     out_file = tmp_path / "report.html"
@@ -714,4 +723,4 @@ def test_executive_and_technical_report_split(tmp_path: Path) -> None:
     exec_file_content = out_file.read_text(encoding="utf-8")
     tech_file_content = (tmp_path / "technical-report.html").read_text(encoding="utf-8")
     assert "Executive Security Intelligence Report" in exec_file_content
-    assert "Technical Remediation & Evidence Report" in tech_file_content
+    assert "Technical Remediation &amp; Evidence Report" in tech_file_content

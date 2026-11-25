@@ -32,6 +32,60 @@ def _count(value: object) -> str:
     return "UNKNOWN" if value is None else str(value)
 
 
+def _approval_lines(snapshot: RunReport) -> list[str]:
+    lines = ["## Approval and Developer Actions", ""]
+    if snapshot.approval_groups:
+        pending = sum(group.plans_count for group in snapshot.approval_groups)
+        lines.extend([
+            f"> **Governance Authorization Gate** · {pending} plans pending review.",
+            "",
+            "| Approval group | Plans | Recommended action |",
+            "| --- | ---: | --- |",
+        ])
+        for group in snapshot.approval_groups:
+            lines.append(
+                f"| {escape_markdown(group.title)} | {group.plans_count} | "
+                f"{escape_markdown(group.recommended_action)} |"
+            )
+        lines.extend([
+            "",
+            "**Batch approval command**",
+            "",
+            f"```bash\nvulnflow approve --all --resume --repo {escape_markdown(snapshot.header.repository_name)}\n```",
+            "",
+        ])
+
+    other_actions = [
+        action for action in snapshot.action_required if action.action_type != "approve_remediation"
+    ]
+    if other_actions:
+        lines.extend([
+            "| Priority | Action required | Owner |",
+            "| --- | --- | --- |",
+        ])
+        for action in other_actions[:8]:
+            lines.append(
+                f"| {escape_markdown(action.priority.title())} | {escape_markdown(action.description)} | "
+                f"{escape_markdown(action.required_actor)} |"
+            )
+        lines.append("")
+        if len(other_actions) > 8:
+            lines.extend(["See the technical report for all recorded actions.", ""])
+    elif not snapshot.action_required:
+        lines.extend(["No additional actions were recorded.", ""])
+
+    next_steps = list(dict.fromkeys(
+        step for root in snapshot.root_causes for step in root.remaining_developer_actions
+    ))
+    if next_steps:
+        lines.extend(["### Developer next steps", ""])
+        lines.extend(f"- {escape_markdown(step)}" for step in next_steps[:6])
+        lines.append("")
+        if len(next_steps) > 6:
+            lines.extend(["See the technical report for the remaining component actions.", ""])
+    return lines
+
+
 def generate_markdown_report(
     report: RunReport | VulnFlowState, *, html_name: str = "report.html"
 ) -> str:
@@ -44,46 +98,27 @@ def generate_markdown_report(
     lines = [
         "# VulnFlow Enterprise Run Report",
         "",
-        "## Outcome",
+        "## Run Overview",
         "",
-        (
-            f"Run `{escape_markdown(header.run_id)}` finished as **{escape_markdown(header.outcome)}** "
-            f"with exit code `{header.exit_code}` in `{header.execution_mode.value}` mode."
-        ),
-        f"Repository files changed: **{header.repo_changes.value}**.",
+        f"> **{escape_markdown(header.outcome.replace('_', ' ').title())}** · "
+        f"{escape_markdown(header.repository_name)} · Run `{escape_markdown(header.run_id)}`",
         "",
-        "## A. Executive AI Security Assessment",
+        f"Mode `{header.execution_mode.value}` · Exit code `{header.exit_code}` · "
+        f"Repository changes `{header.repo_changes.value}`",
+        "",
+        "[Technical evidence](technical-report.html) · [Run data](run-report.json)",
+        "",
+        "## Executive Security Assessment",
         "",
         "### Summary of findings and risk",
         "",
         escape_markdown(summary.summary_sentence),
         "",
-        (
-            f"- **What was identified**: {summary.findings_analyzed} finding(s) clustered into "
-            f"{summary.root_causes_identified} root cause(s); {summary.expected_cves_addressed} expected CVE(s) addressed."
-        ),
-        (
-            f"- **What solution was proposed**: {summary.remediation_plans_proposed} remediation plan(s) staged across "
-            f"{len(snapshot.remediation_campaigns)} campaign(s)."
-        ),
-        (
-            f"- **What action was taken**: {summary.fixes_applied} fix(es) applied to repository; "
-            f"{summary.prs_actually_created} pull request(s) opened."
-        ),
-        (
-            "- **What other things can be done**: "
-            + (
-                f"{len(snapshot.action_required)} action(s) requiring attention; "
-                f"rescan status: `{evidence.rescan.value}`."
-                if snapshot.action_required
-                else "No further action required; all checks completed."
-            )
-        ),
-        "",
         "| Metric | Value |",
         "| --- | ---: |",
         f"| Findings analyzed | {summary.findings_analyzed} |",
         f"| Root causes | {summary.root_causes_identified} |",
+        f"| Proposed plans | {summary.remediation_plans_proposed} |",
         f"| Expected CVEs addressed | {summary.expected_cves_addressed} |",
         f"| Verified CVEs resolved | {summary.verified_cves_resolved} |",
         f"| Fixes applied | {summary.fixes_applied} |",
@@ -91,9 +126,9 @@ def generate_markdown_report(
         f"| Unresolved findings | {_count(summary.unresolved_findings)} |",
         "",
     ]
+    lines.extend(_approval_lines(snapshot))
 
-    # Section B: Remediation Actions Performed
-    lines.extend(["## B. Remediation Actions Performed", ""])
+    lines.extend(["## Remediation Actions Performed", ""])
     if snapshot.applied_patches:
         lines.append(
             f"**Applied Fixes & Mitigations ({len(snapshot.applied_patches)}):**"
@@ -125,8 +160,7 @@ def generate_markdown_report(
         lines.append("- No repository file change has verified execution evidence.")
     lines.append("")
 
-    # Section C: Pull Requests Created
-    lines.extend(["## C. Pull Requests Created", ""])
+    lines.extend(["## Pull Requests Created", ""])
     if snapshot.pull_requests:
         for pr in snapshot.pull_requests:
             pr_label = f"PR #{pr.pr_number}" if pr.pr_number else "Pull Request"
@@ -150,10 +184,9 @@ def generate_markdown_report(
         lines.append("- No pull requests were opened in this execution.")
     lines.append("")
 
-    # Section D: AI Investigations and Decisions
     lines.extend(
         [
-            "## D. AI Investigations and Decisions",
+            "## AI Investigations and Decisions",
             "",
             "### Root-cause remediation summaries",
             "",
@@ -201,8 +234,7 @@ def generate_markdown_report(
     )
     lines.append("")
 
-    # Section E: Proposed Remediation Campaigns
-    lines.extend(["## E. Proposed Remediation Campaigns", ""])
+    lines.extend(["## Proposed Remediation Campaigns", ""])
     if snapshot.remediation_campaigns:
         for camp in snapshot.remediation_campaigns:
             cve_count = len(camp.cves_addressed)
@@ -219,73 +251,16 @@ def generate_markdown_report(
         lines.append("- No multi-package remediation campaigns were active.")
     lines.append("")
 
-    # Section F: Approval and Developer Action Plan
-    lines.extend(
-        ["## F. Approval and Developer Action Plan", "", "### Action required", ""]
-    )
-    if snapshot.approval_groups:
-        total_p = sum(g.plans_count for g in snapshot.approval_groups)
-        lines.append(
-            f"**⚡ Governance Authorization Gate ({total_p} Plans Pending Review):**"
-        )
-        lines.append("")
-        for g in snapshot.approval_groups:
-            pkgs = escape_markdown(", ".join(g.target_packages[:6])) + (
-                "..." if len(g.target_packages) > 6 else ""
-            )
-            lines.append(
-                f"- **{escape_markdown(g.title)} ({g.plans_count} plan(s))**: {escape_markdown(g.description)} "
-                f"Targets: `{pkgs}`. Action: {escape_markdown(g.recommended_action)}"
-            )
-        lines.append("")
-        lines.append("👉 **Quick Batch Action**:")
-        lines.append(
-            f"```bash\nvulnflow approve --all --resume --repo {escape_markdown(header.repository_name)}\n```"
-        )
-        lines.append("")
-
-    non_approval_actions = [
-        a for a in snapshot.action_required if a.action_type != "approve_remediation"
-    ]
-    if non_approval_actions:
-        for action in non_approval_actions:
-            target = (
-                f" for {escape_markdown(action.target_root_cause)}"
-                if action.target_root_cause
-                else ""
-            )
-            lines.append(
-                f"- **{escape_markdown(action.priority)}**: {escape_markdown(action.description)}"
-                f"{target} — actor: `{escape_markdown(action.required_actor)}`; "
-                f"status: `{action.completion_status.value}`."
-            )
-        lines.append("")
-    elif not snapshot.approval_groups and not snapshot.action_required:
-        lines.append("- No immediate action is recorded.")
-        lines.append("")
-
-    lines.extend(["### Developer next steps", ""])
-    next_steps = [
-        item
-        for root in snapshot.root_causes
-        for item in root.remaining_developer_actions
-    ]
-    lines.extend(f"- {escape_markdown(item)}" for item in dict.fromkeys(next_steps))
-    if not next_steps:
-        lines.append("- Review the full evidence report before merging.")
-    lines.append("")
-
-    # Section G: Verification and Residual Risk
     lines.extend(
         [
-            "## G. Verification and Residual Risk",
+            "## Verification and Residual Risk",
             "",
-            "### Verification state",
-            "",
-            f"- Patch: `{evidence.patch.value}`",
-            f"- Tests: `{evidence.tests.value}`",
-            f"- Pull request: `{evidence.pull_request.value}`",
-            f"- Post-fix rescan: `{evidence.rescan.value}`",
+            "| Check | State |",
+            "| --- | --- |",
+            f"| Patch | `{evidence.patch.value}` |",
+            f"| Build and tests | `{evidence.tests.value}` |",
+            f"| Pull request | `{evidence.pull_request.value}` |",
+            f"| Post-fix rescan | `{evidence.rescan.value}` |",
             "",
             "### Risks",
             "",
@@ -304,10 +279,9 @@ def generate_markdown_report(
         )
     lines.append("")
 
-    # Section H: Technical Evidence Appendix
     lines.extend(
         [
-            "## H. Technical Evidence Appendix",
+            "## Technical Evidence Appendix",
             "",
             f"- Input Scanner File SHA-256: `{escape_markdown(snapshot.provenance.input_scanner_file_sha256 or 'Live container/filesystem scan')}`",
             f"- Audit Chain Head: `{escape_markdown(snapshot.provenance.audit_chain_head_hash or 'UNKNOWN')}`",
