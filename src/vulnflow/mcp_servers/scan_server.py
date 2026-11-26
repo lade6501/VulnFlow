@@ -51,8 +51,8 @@ class ScanServer:
             ("slack", re.compile(r"https://hooks\.slack\.com/services/[A-Za-z0-9/_-]+")),
             ("aws-access-key-id", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
             ("pii-ssn", re.compile(r"\b\d{3}-\d{2}-\d{4}\b")),
-            ("database-password", re.compile(r"(?i)(?:database_password|db_password|db_pass|database_pass)\s*[:=]\s*[\x27\x22]([^\x27\x22]+)[\x27\x22]")),
-            ("api-key", re.compile(r"(?i)(?:api_key|api_secret|secret_token|access_token|auth_token)\s*[:=]\s*[\x27\x22]([^\x27\x22]+)[\x27\x22]")),
+            ("database-password", re.compile(r"(?i)\b(?P<name>\w*(?:database_password|db_password|db_pass|database_pass))\s*[:=]\s*[\x27\x22]([^\x27\x22]+)[\x27\x22]")),
+            ("api-key", re.compile(r"(?i)\b(?P<name>\w*(?:api_key|api_secret|secret_token|access_token|auth_token))\s*[:=]\s*[\x27\x22]([^\x27\x22]+)[\x27\x22]")),
         ]
         exts = {".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".java", ".rb", ".php", ".cs", ".yaml", ".yml", ".env"}
         skip_dirs = {".git", "node_modules", ".venv", "venv", "__pycache__", ".vulnflow", "dist", "build"}
@@ -65,6 +65,7 @@ class ScanServer:
             try:
                 rel = str(p.relative_to(repo_path))
                 content = p.read_text(encoding="utf-8", errors="ignore")
+                occurrences: dict[tuple[str, str], int] = {}
                 for line_no, line in enumerate(content.splitlines(), start=1):
                     # Skip lines already using environment variables or redaction
                     if "os.getenv" in line or "process.env" in line or "System.getenv" in line or "ENV[" in line:
@@ -72,6 +73,12 @@ class ScanServer:
                     for rule_id, pat in patterns:
                         m = pat.search(line)
                         if m:
+                            name = m.groupdict().get("name")
+                            occurrence = f"line:{line_no}"
+                            if name:
+                                key = (rule_id, name)
+                                occurrences[key] = occurrences.get(key, 0) + 1
+                                occurrence = f"assignment:{name}:{occurrences[key]}"
                             fnd_id = compute_finding_id(
                                 scanner="vulnflow-secret",
                                 repo=repo,
@@ -79,6 +86,7 @@ class ScanServer:
                                 version=rule_id,
                                 cve=[rule_id],
                                 file_path=rel,
+                                occurrence=occurrence,
                             )
                             findings.append(Finding(
                                 id=fnd_id,

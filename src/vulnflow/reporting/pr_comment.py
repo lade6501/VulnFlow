@@ -54,6 +54,8 @@ def format_pr_body(
     if ver:
         test_status = "✅ PASSED" if ver.tests_passed else "❌ FAILED"
         clean_status = "✅ ZERO REMAINING FINDINGS" if ver.rescan_clean else "⚠️ PARTIAL RESOLUTION"
+        if ver.verified and not ver.rescan_clean:
+            clean_status = "✅ APPROVED FINDINGS RESOLVED (NO NEW FINDINGS)"
         body_lines.extend([
             "### 🧪 Verification & Build Evidence",
             f"- **Sandbox Tests**: {test_status}",
@@ -156,6 +158,7 @@ def format_campaign_pr_body(
     if ver:
         tests_passed = ver.get("tests_passed", True) if isinstance(ver, dict) else getattr(ver, "tests_passed", True)
         rescan_clean = ver.get("rescan_clean", True) if isinstance(ver, dict) else getattr(ver, "rescan_clean", True)
+        verified = ver.get("verified", False) if isinstance(ver, dict) else ver.verified
         policy_recheck = (
             ver.get("policy_recheck_passed", True)
             if isinstance(ver, dict)
@@ -163,6 +166,8 @@ def format_campaign_pr_body(
         )
         test_status = "✅ PASSED" if tests_passed else "❌ FAILED"
         clean_status = "✅ ZERO REMAINING FINDINGS" if rescan_clean else "⚠️ PARTIAL RESOLUTION"
+        if verified and not rescan_clean:
+            clean_status = "✅ APPROVED FINDINGS RESOLVED (NO NEW FINDINGS)"
         policy_status = "✅ PASSED" if policy_recheck else "❌ FAILED"
         body_lines.extend([
             "### 🧪 Verification & Build Evidence",

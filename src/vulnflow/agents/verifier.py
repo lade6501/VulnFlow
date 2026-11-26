@@ -39,12 +39,28 @@ class VerifierAgent:
         ecosystem: str = "npm",
         scanner: str = "trivy",
         branch: str | None = None,
+        *,
+        baseline_scan: dict[str, Any] | None = None,
     ) -> VerificationResult:
         """
         Verify that remediation resolved findings using scan_diff and manifest policy recheck.
         Strict invariant: A failed verify is never reported as success.
         """
-        before_ids = [f.id for f in before_findings]
+        before_ids = {f.id for f in before_findings}
+        target_ids = {finding_id for plan in plans for finding_id in plan.finding_ids} if plans else before_ids
+        baseline_revision = None
+        baseline_complete = True
+        baseline_ids = target_ids
+        if baseline_scan is not None:
+            baseline_revision = baseline_scan.get("revision")
+            baseline_complete = bool(
+                baseline_scan.get("executed") and baseline_scan.get("complete") and baseline_revision
+            )
+            baseline_ids = {
+                str(item["id"]) for item in baseline_scan.get("findings", [])
+                if isinstance(item, dict) and item.get("id")
+            }
+        missing_targets = target_ids - (before_ids & baseline_ids)
 
         # 1. Execute a real, branch-specific rescan unless the caller supplied
         # explicit recorded scan evidence (used by deterministic contract tests).
@@ -53,17 +69,19 @@ class VerifierAgent:
         scan_revision: str | None = None
         scanned_dependencies: list[dict[str, str]] = []
         if after_finding_ids is None:
-            finding_types = [
+            finding_types = {
                 finding.type.value
                 if hasattr(finding.type, "value")
                 else str(finding.type)
                 for finding in before_findings
-            ]
+            }
+            if baseline_scan and baseline_scan.get("dependency_targets"):
+                finding_types.add("vuln")
             scan_result = scan_server.scan_verify(
                 repo=repo_path,
                 scanner=scanner,
                 branch=branch,
-                finding_types=finding_types,
+                finding_types=sorted(finding_types),
             )
             scan_complete = bool(scan_result.get("executed") and scan_result.get("complete"))
             scan_error = scan_result.get("error")
@@ -80,10 +98,11 @@ class VerifierAgent:
             ]
         else:
             after_ids = after_finding_ids
-        diff = scan_server.scan_diff(before=before_ids, after=after_ids)
-        rescan_clean = scan_complete and diff.get("clean", False)
-        resolved_ids = diff.get("resolved", []) if scan_complete else []
-        new_ids = diff.get("new", [fid for fid in after_ids if fid not in before_ids])
+        remaining_ids = set(after_ids)
+        rescan_clean = scan_complete and not remaining_ids
+        unresolved_targets = target_ids & remaining_ids
+        resolved_ids = sorted(target_ids - missing_targets - remaining_ids) if scan_complete and baseline_complete else []
+        new_ids = sorted(remaining_ids - baseline_ids) if scan_complete and baseline_complete else []
 
         # 2. Check sandboxed test and build outcomes
         test_results = test_results or []
@@ -148,12 +167,14 @@ class VerifierAgent:
                 policy_recheck_passed = False
 
         # 4. Strict verification invariant:
-        # Must have resolved target findings, introduced no new findings, rescan must be clean,
+        # Must have resolved all targets and introduced no findings relative to the base revision.
         # policy recheck must pass, and sandbox tests/build must pass.
         verified = (
-            bool(before_ids)
+            bool(target_ids)
             and scan_complete
-            and rescan_clean
+            and baseline_complete
+            and not missing_targets
+            and not unresolved_targets
             and policy_recheck_passed
             and tests_passed
             and build_success
@@ -166,10 +187,16 @@ class VerifierAgent:
             details_parts.append(
                 f"Post-fix scan did not complete: {scan_error or 'no scanner evidence'}"
             )
-        if not before_ids:
-            details_parts.append("No pre-remediation finding baseline was available")
-        if not rescan_clean:
-            details_parts.append(f"Rescan not clean: {len(after_ids)} residual finding(s)")
+        if not baseline_complete:
+            details_parts.append("Base revision scan did not complete")
+        if not target_ids:
+            details_parts.append("No approved findings were available for verification")
+        if missing_targets and baseline_complete:
+            details_parts.append(f"{len(missing_targets)} approved finding(s) missing from the baseline. Run a fresh scan and approve a new plan.")
+        if scan_complete and unresolved_targets:
+            details_parts.append(f"{len(unresolved_targets)} approved finding(s) still present")
+        if new_ids:
+            details_parts.append(f"{len(new_ids)} new finding(s) relative to the baseline")
         if not policy_recheck_passed:
             details_parts.append("Policy recheck failed on manifest")
         if not tests_passed or not build_success:
@@ -177,7 +204,10 @@ class VerifierAgent:
         if scan_complete and not revisions_match:
             details_parts.append("Build and scan evidence did not identify the same Git commit")
         if verified:
-            details_parts.append(f"Cleanly resolved {len(resolved_ids)} vulnerability(ies)")
+            details_parts.append(f"Resolved all {len(resolved_ids)} approved finding(s) with no new findings")
+        preexisting = (remaining_ids & baseline_ids) - target_ids
+        if scan_complete and baseline_complete and preexisting:
+            details_parts.append(f"{len(preexisting)} unrelated pre-existing finding(s) remain")
 
         return VerificationResult(
             verified=verified,
@@ -189,6 +219,8 @@ class VerifierAgent:
             tests_passed=tests_passed,
             revision=scan_revision,
             scan_complete=scan_complete,
+            baseline_revision=baseline_revision,
+            remaining_finding_ids=sorted(remaining_ids) if scan_complete else None,
             details="; ".join(details_parts),
         )
 
