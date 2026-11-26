@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -26,6 +27,8 @@ from vulnflow.llm.base import (
     LLMStructuredOutputError,
     LLMUsage,
 )
+from vulnflow.llm.factory import GuardedRecorderClient
+from vulnflow.llm.providers.nvidia import NvidiaProvider
 from vulnflow.orchestrator.nodes import _apply_graph_governance
 
 
@@ -268,6 +271,53 @@ def test_large_run_calls_once_per_batch_not_once_per_dependency(
     assert [message for message in caplog.messages if "Enrichment batch " in message] == [
         f"\033[92mEnrichment batch {number} of 3\033[0m" for number in range(1, 4)
     ]
+
+
+def test_nemotron_uses_provider_token_limit_and_splits_truncated_batches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VULNFLOW_BATCH_ENRICHMENT_MAX_PLANS", "20")
+    plans = [_plan(f"PLAN-{index}", f"npm:package-{index}") for index in range(20)]
+    planner = PlannerAgent(
+        client=GuardedRecorderClient(NvidiaProvider(api_key="local-test-key")),
+        enable_llm=True,
+        enrichment_mode="selective",
+    )
+
+    def reply(content: str, finish_reason: str) -> bytes:
+        return json.dumps({"choices": [{
+            "message": {"content": content}, "finish_reason": finish_reason,
+        }]}).encode()
+
+    def completed_batch(batch: list[RemediationPlan]) -> bytes:
+        return reply(json.dumps({"enrichments": [
+            {
+                "plan_id": plan.id,
+                "breaking_change_assessment": "Review compatibility.",
+                "approval_summary": "Review required.",
+                "confidence": 0.9,
+            }
+            for plan in batch
+        ]}), "stop")
+
+    with patch("vulnflow.llm.providers.nvidia.urllib.request.urlopen") as urlopen:
+        urlopen.return_value.__enter__.return_value.read.side_effect = [
+            reply('{"enrichments": [', "length"),
+            completed_batch(plans[:10]),
+            completed_batch(plans[10:]),
+        ]
+        planner.enrich_plans_batch(
+            plans, {plan.id: _context(plan) for plan in plans}, repo_path="acme/payments"
+        )
+
+    requests = [json.loads(call.args[0].data) for call in urlopen.call_args_list]
+    assert len(requests) == 3
+    assert all("max_tokens" not in request for request in requests)
+    assert all(request["chat_template_kwargs"] == {"enable_thinking": False} for request in requests)
+    assert all(request["stream"] is False for request in requests)
+    assert all("retry_on_length" not in request for request in requests)
+    assert planner.enrichment_stats()["batch_splits"] == 1
+    assert all(plan.llm_enrichment is not None for plan in plans)
 
 
 def test_failed_batch_records_safe_diagnostics_for_attempted_plans(
