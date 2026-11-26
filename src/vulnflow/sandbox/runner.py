@@ -52,15 +52,20 @@ class SandboxRunner:
         image = os.getenv("VULNFLOW_BUILD_SANDBOX_IMAGE", "").strip()
         if not docker or not image or image.startswith("-"):
             return 1, "", "Build isolation requires Docker and VULNFLOW_BUILD_SANDBOX_IMAGE"
+        try:
+            checkout_owner = cwd.stat()
+        except OSError as exc:
+            return 1, "", f"Could not inspect the sandbox checkout: {exc}"
         container_name = f"vulnflow-check-{uuid.uuid4().hex}"
         container_env = {"HOME": "/tmp", "NODE_ENV": "test", "CI": "true"}
         if env_overrides:
             container_env.update(env_overrides)
         invocation = [
             docker, "run", "--rm", "--name", container_name, "--pull=never",
+            "--user", f"{checkout_owner.st_uid}:{checkout_owner.st_gid}",
             "--network=none", "--cap-drop=ALL", "--security-opt=no-new-privileges",
             "--memory=1g", "--pids-limit=256", "--cpus=2",
-            "--read-only", "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m",
+            "--read-only", "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m,mode=1777",
             "--mount", f"type=bind,source={cwd},target=/workspace",
             "--workdir", "/workspace",
         ]

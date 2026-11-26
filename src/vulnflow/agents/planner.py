@@ -23,6 +23,7 @@ from vulnflow.contracts.remediation_plan import (
     RemediationPlan,
     RiskTier,
 )
+from vulnflow.core import console
 from vulnflow.core.redaction import redact_secrets
 from vulnflow.core.risk import calculate_risk_tier
 from vulnflow.core.sanitization import (
@@ -851,8 +852,12 @@ class PlannerAgent:
             (misses[start : start + batch_size], True)
             for start in range(0, len(misses), batch_size)
         )
+        batch_number = 0
         while pending_batches:
             batch, can_split = pending_batches.popleft()
+            batch_number += 1
+            total_batches = batch_number + len(pending_batches)
+            logger.info("%s", console.green(f"Enrichment batch {batch_number} of {total_batches}"))
             provider_name = (
                 self.client.get_provider_name()
                 if hasattr(self.client, "get_provider_name")

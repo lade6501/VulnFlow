@@ -18,6 +18,7 @@ from vulnflow.contracts.remediation_plan import (
     RemediationPlan,
     RiskTier,
 )
+from vulnflow.core import console
 from vulnflow.llm.base import (
     LLMMessage,
     LLMRateLimitError,
@@ -239,7 +240,14 @@ def test_auto_tier_plans_consume_no_batch_budget() -> None:
     assert plan.llm_enrichment is None
 
 
-def test_large_run_calls_once_per_batch_not_once_per_dependency() -> None:
+def test_large_run_calls_once_per_batch_not_once_per_dependency(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("VULNFLOW_BATCH_ENRICHMENT_MAX_PLANS", "20")
+    monkeypatch.setattr(console, "USE_COLOR", True)
+    monkeypatch.setattr(console, "GREEN", "\033[92m")
+    monkeypatch.setattr(console, "RESET", "\033[0m")
+    caplog.set_level("INFO", logger="vulnflow.agents.planner")
     plans = [_plan(f"PLAN-{index}", f"npm:package-{index}") for index in range(45)]
     client = BatchPlannerClient([plan.id for plan in plans])
     planner = PlannerAgent(
@@ -257,6 +265,9 @@ def test_large_run_calls_once_per_batch_not_once_per_dependency() -> None:
     assert client.calls == 3
     assert planner.enrichment_stats()["batch_calls"] == 3
     assert sum(plan.llm_enrichment is not None for plan in plans) == 45
+    assert [message for message in caplog.messages if "Enrichment batch " in message] == [
+        f"\033[92mEnrichment batch {number} of 3\033[0m" for number in range(1, 4)
+    ]
 
 
 def test_failed_batch_records_safe_diagnostics_for_attempted_plans(
@@ -318,7 +329,7 @@ def test_prompt_preparation_failure_does_not_count_as_a_model_call(
 
 
 def test_invalid_output_splits_once_and_preserves_later_batches(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     class FormattingFailureClient(BatchPlannerClient):
         def __init__(self) -> None:
@@ -333,6 +344,8 @@ def test_invalid_output_splits_once_and_preserves_later_batches(
             return super().structured_complete(**kwargs)
 
     monkeypatch.setenv("VULNFLOW_BATCH_ENRICHMENT_MAX_PLANS", "3")
+    monkeypatch.setattr(console, "USE_COLOR", False)
+    caplog.set_level("INFO", logger="vulnflow.agents.planner")
     plans = [_plan(f"PLAN-{index}", f"npm:package-{index}") for index in range(5)]
     client = FormattingFailureClient()
     planner = PlannerAgent(client=client, enable_llm=True)  # type: ignore[arg-type]
@@ -350,6 +363,12 @@ def test_invalid_output_splits_once_and_preserves_later_batches(
 
     assert client.attempts == [
         ["PLAN-0", "PLAN-1", "PLAN-2"], ["PLAN-0"], ["PLAN-1", "PLAN-2"], ["PLAN-3", "PLAN-4"],
+    ]
+    assert [message for message in caplog.messages if "Enrichment batch " in message] == [
+        "Enrichment batch 1 of 2",
+        "Enrichment batch 2 of 4",
+        "Enrichment batch 3 of 4",
+        "Enrichment batch 4 of 4",
     ]
     stats = planner.enrichment_stats()
     assert stats["batch_splits"] == 1
