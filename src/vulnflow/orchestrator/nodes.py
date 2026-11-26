@@ -635,7 +635,7 @@ def fix_node(state: VulnFlowState) -> VulnFlowState:
     if not (repo / ".git").exists():
         raise RuntimeError("Repository is not a git checkout")
     with build_server.sandbox.isolated_checkout(repo) as worktree:
-        return _fix_checkout(state, worktree)
+        return _fix_checkout(state, worktree.resolve())
 
 
 def _fix_checkout(state: VulnFlowState, repo_p: Path) -> VulnFlowState:
@@ -899,15 +899,19 @@ def _fix_checkout(state: VulnFlowState, repo_p: Path) -> VulnFlowState:
                     try:
                         content = target_file_path.read_text(encoding="utf-8")
                         current_content = content
+                        line_offset = 0
                         for item in items:
                             rule_id = item.get("rule_id", "secret")
                             line_no = item.get("line")
-                            current_content, _ = default_secrets_agent.remediate_code(
+                            updated_content, _ = default_secrets_agent.remediate_code(
                                 content=current_content,
                                 file_suffix=target_file_path.suffix,
                                 rule_id=rule_id,
-                                line_no=line_no,
+                                line_no=line_no + line_offset if line_no else None,
                             )
+                            # Python remediation may prepend an import before subsequent findings.
+                            line_offset += updated_content.count("\n") - current_content.count("\n")
+                            current_content = updated_content
                         if current_content != content:
                             target_file_path.write_text(
                                 current_content, encoding="utf-8"
@@ -970,6 +974,8 @@ def _fix_checkout(state: VulnFlowState, repo_p: Path) -> VulnFlowState:
             if base_branch:
                 git_server.git_checkout(base_branch, worktree)
 
+        for patch_record in patches:
+            patch_record["base_revision"] = base_branch
         state.patches = patches
         state.append_audit(
             "PATCHES_APPLIED", "orchestrator", {"patches_count": len(patches)}
@@ -1244,14 +1250,35 @@ def verify_node(state: VulnFlowState) -> VulnFlowState:
             return state
 
         branch_to_plan_ids: dict[str, set[str]] = {}
+        branch_to_base_revisions: dict[str, set[str | None]] = {}
         for patch in state.patches:
             branch = patch.get("branch")
             plan_id = patch.get("plan_id")
             if branch and plan_id:
                 branch_to_plan_ids.setdefault(str(branch), set()).add(str(plan_id))
+                base_revision = patch.get("base_revision")
+                branch_to_base_revisions.setdefault(str(branch), set()).add(
+                    base_revision if isinstance(base_revision, str) else None
+                )
 
         results: list[dict[str, Any]] = []
+        baseline_scans: dict[str, dict[str, Any]] = {}
+        baseline_finding_types = sorted({finding.type.value for finding in state.findings})
         for branch, plan_ids in branch_to_plan_ids.items():
+            base_revisions = branch_to_base_revisions[branch]
+            base_revision = next(iter(base_revisions)) if len(base_revisions) == 1 else None
+            baseline_scan: dict[str, Any] = {}
+            if base_revision:
+                if base_revision not in baseline_scans:
+                    baseline_scans[base_revision] = scan_server.scan_verify(
+                        repo=state.repo_path,
+                        scanner=state.scanner,
+                        branch=base_revision,
+                        finding_types=baseline_finding_types,
+                    )
+                candidate_baseline = baseline_scans[base_revision]
+                if candidate_baseline.get("revision") == base_revision:
+                    baseline_scan = candidate_baseline
             branch_plans = [plan for plan in state.approved_plans if plan.id in plan_ids]
             finding_ids = {
                 finding_id
@@ -1274,6 +1301,7 @@ def verify_node(state: VulnFlowState) -> VulnFlowState:
                 ecosystem=state.ecosystem,
                 scanner=state.scanner,
                 branch=branch,
+                baseline_scan=baseline_scan,
             )
             results.append({"branch": branch, **ver_res.to_dict()})
             state.append_audit(

@@ -210,6 +210,7 @@ class TrivyAdapter:
             version=rule_id,
             cve=[rule_id],
             file_path=target_file,
+            occurrence=f"line:{start_line}",
         )
 
         return Finding(

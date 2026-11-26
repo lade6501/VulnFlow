@@ -57,10 +57,14 @@ def compute_finding_id(
     version: str,
     cve: List[str],
     file_path: str = "",
+    *,
+    occurrence: str = "",
 ) -> str:
     """Generate a stable deterministic SHA256 identifier for a unique finding."""
     cve_str = ",".join(sorted(cve))
     raw = f"{scanner.lower()}|{repo}|{package.lower()}|{version}|{cve_str}|{file_path}"
+    if occurrence:
+        raw = f"{raw}|{occurrence}"
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     return f"FND-{digest[:16]}"
 

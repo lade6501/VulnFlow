@@ -85,6 +85,8 @@ class VerificationResult:
     details: Optional[str] = None
     revision: Optional[str] = None
     scan_complete: bool = False
+    baseline_revision: Optional[str] = None
+    remaining_finding_ids: Optional[List[str]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -102,6 +104,8 @@ class VerificationResult:
             details=data.get("details"),
             revision=data.get("revision"),
             scan_complete=bool(data.get("scan_complete", False)),
+            baseline_revision=data.get("baseline_revision"),
+            remaining_finding_ids=data.get("remaining_finding_ids"),
         )
 
 

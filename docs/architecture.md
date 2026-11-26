@@ -21,7 +21,7 @@ Modern security scanners (Trivy, Grype, OSV-Scanner, Gitleaks) report hundreds o
 - **Deterministic Policy Enforcement**: Enforce organizational approved-package, deprecated, banned, and license policies in deterministic code.
 - **Proactive Expiry Management**: Predict certificate and artifact expirations, initiating renewals before scanners flag failures.
 - **Human-in-the-Loop Governance**: Enforce approval gates based on calculated risk tiers before applying sensitive changes.
-- **Closed-Loop Verification**: Require a clean rescan and policy recheck before declaring any finding resolved.
+- **Closed-Loop Verification**: Compare the patched branch with its base commit. Require all approved findings to be resolved, no new findings, and a passing policy recheck.
 - **CI/CD Portability**: Provide a single container entry point and contract compatible with GitHub Actions, Jenkins, GitLab CI, or custom pipelines.
 
 ### 1.3 Non-Goals
@@ -421,7 +421,7 @@ docker run --rm \
 
 | Tier | Conditions | Action |
 | --- | --- | --- |
-| **`auto`** | Patch version bump, approved in policy, tests green, clean rescan | Automatically open PR, no approval hold |
+| **`auto`** | Patch version bump, approved in policy, tests green, approved findings resolved with no new findings | Automatically open PR, no approval hold |
 | **`review`** | Major bump, deprecated package replacement, sensitive paths, test failure, secret finding, or missing evidence | Open PR in draft/review state; hold for human approval |
 | **`blocked`** | Banned package, unknown package, unapproved fix version, or no fix available | Open exception ticket with context; no PR opened |
 

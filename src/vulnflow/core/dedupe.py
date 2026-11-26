@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Set, Tuple
 
-from vulnflow.contracts.finding import Finding, SeverityLevel
+from vulnflow.contracts.finding import Finding, FindingType, SeverityLevel
 
 logger = logging.getLogger("vulnflow.core.dedupe")
 
@@ -45,17 +45,19 @@ class DeduplicationEngine:
             self.deduped_count = 0
             return []
 
-        # Group by package and file path
-        grouped: Dict[Tuple[str, str], List[Finding]] = {}
+        # Preserve each secret location when multiple credentials share a rule.
+        grouped: Dict[Tuple[str, str, int | None, str], List[Finding]] = {}
         for f in findings:
-            key = (f.package.lower(), f.location.file_path)
+            is_secret = f.type == FindingType.SECRET
+            key = (f.package.lower(), f.location.file_path, f.location.line if is_secret else None,
+                   f.id if is_secret else "")
             if key not in grouped:
                 grouped[key] = []
             grouped[key].append(f)
 
         deduped: List[Finding] = []
 
-        for (pkg, fpath), group in grouped.items():
+        for group in grouped.values():
             # Sub-cluster by overlapping CVEs
             clusters: List[List[Finding]] = []
             for item in group:

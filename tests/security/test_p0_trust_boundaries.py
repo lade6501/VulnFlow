@@ -20,7 +20,9 @@ from api.security import (
     webhook_signature_valid,
 )
 from api.routes.runs import enqueue_run
+from vulnflow.adapters.input.trivy import TrivyAdapter
 from vulnflow.agents.fixer import FixerAgent
+from vulnflow.agents.secrets import SecretsAgent
 from vulnflow.agents.verifier import VerifierAgent
 from vulnflow.contracts.finding import (
     Finding,
@@ -30,9 +32,13 @@ from vulnflow.contracts.finding import (
 )
 from vulnflow.contracts.remediation_plan import RemediationAction, RemediationPlan
 from vulnflow.contracts.state import VulnFlowState
+from vulnflow.core.dedupe import deduplicate_findings
 from vulnflow.mcp_servers.external import github_mcp_bridge
 from vulnflow.mcp_servers.git_server import GitServer
+from vulnflow.mcp_servers.scan_server import scan_server
 from vulnflow.orchestrator.graph import run_workflow
+from vulnflow.orchestrator.nodes import fix_node
+from vulnflow.reporting.builder import build_run_report
 from vulnflow.sandbox.runner import SandboxRunner
 
 
@@ -146,6 +152,55 @@ def test_sandbox_reads_requested_branch_without_mutating_worktree(
 
     assert (tmp_path / "marker.txt").read_text(encoding="utf-8") == "base\n"
     assert _run_git(tmp_path, "rev-parse", "--abbrev-ref", "HEAD") == original_branch
+
+
+def test_same_file_secret_occurrences_are_planned_and_patched_individually(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    credentials = tmp_path / "credentials.py"
+    credentials.write_text('API_KEY = "demo-one"\nSECRET_TOKEN = "demo-two"\n', encoding="utf-8")
+    _run_git(tmp_path, "add", "credentials.py")
+    _run_git(tmp_path, "commit", "-m", "Add synthetic credentials")
+
+    findings = deduplicate_findings(scan_server.scan_source_secrets(tmp_path))
+    assert [finding.location.line for finding in findings] == [1, 2]
+    assert len({finding.id for finding in findings}) == 2
+    plan = SecretsAgent().plan_consolidated_secret_remediation(findings)
+    state = VulnFlowState(repo_path=str(tmp_path), approved_plans=[plan])
+    fixed = fix_node(state)
+    branch = fixed.patches[0]["branch"]
+    with SandboxRunner().isolated_checkout(tmp_path, branch=branch) as checkout:
+        assert scan_server.scan_source_secrets(checkout) == []
+        assert (checkout / "credentials.py").read_text(encoding="utf-8").startswith("import os\n")
+
+
+@pytest.mark.parametrize(
+    ("baseline_ids", "after_ids", "baseline_complete", "verified"),
+    [
+        (["FND-P0-1", "FND-existing"], ["FND-existing"], True, True),
+        (["FND-P0-1", "FND-existing"], ["FND-existing", "FND-new"], True, False),
+        (["FND-P0-1", "FND-existing"], ["FND-P0-1"], True, False),
+        (["FND-existing"], ["FND-existing"], True, False),
+        (["FND-P0-1"], [], False, False),
+    ],
+)
+def test_verification_requires_all_targets_and_no_regressions(
+    tmp_path: Path, baseline_ids: list[str], after_ids: list[str],
+    baseline_complete: bool, verified: bool,
+) -> None:
+    finding = _finding()
+    plan = RemediationPlan(finding_ids=[finding.id], root_cause_id=finding.package,
+                           action=RemediationAction.BUMP)
+    result = VerifierAgent().verify_remediation(
+        str(tmp_path), [plan], [finding],
+        test_results=[{"passed": True, "build_clean": True}],
+        after_finding_ids=after_ids,
+        baseline_scan={"executed": True, "complete": baseline_complete, "revision": "base",
+                       "findings": [{"id": finding_id} for finding_id in baseline_ids]},
+    )
+
+    assert result.verified is verified
+    assert result.remaining_finding_ids == sorted(after_ids)
+    assert result.new_finding_ids == (["FND-new"] if "FND-new" in after_ids else [])
 
 
 def test_api_mutations_signatures_and_paths_are_fail_closed(
@@ -371,6 +426,8 @@ def test_workflow_publishes_only_after_verified_branch_evidence(tmp_path: Path) 
     _run_git(tmp_path, "commit", "-m", "add test dependency")
     baseline = Path(__file__).resolve().parents[2] / "data/fixtures/sample_trivy_report.json"
     state = VulnFlowState(repo_path=str(tmp_path), report_path=str(baseline), mode="pr")
+    base_revision = _run_git(tmp_path, "rev-parse", "HEAD")
+    initial_findings = TrivyAdapter().parse_file(str(baseline), repo=str(tmp_path))
     calls: list[str] = []
 
     def check_build(repo: str, branch: str, ecosystem: str) -> dict:
@@ -381,10 +438,17 @@ def test_workflow_publishes_only_after_verified_branch_evidence(tmp_path: Path) 
         }
 
     def rescan(*, repo: str, scanner: str, branch: str, finding_types: list[str]) -> dict:
+        if branch == base_revision:
+            calls.append("baseline")
+            assert "4.17.15" in _run_git(Path(repo), "show", f"{branch}:package.json")
+            return {
+                "executed": True, "complete": True, "revision": base_revision,
+                "findings": [finding.to_dict() for finding in initial_findings] + [{"id": "FND-existing"}],
+            }
         calls.append("scan")
         assert "4.17.21" in _run_git(Path(repo), "show", f"{branch}:package.json")
         return {
-            "executed": True, "complete": True, "findings": [],
+            "executed": True, "complete": True, "findings": [{"id": "FND-existing"}],
             "revision": _run_git(Path(repo), "rev-parse", branch),
             "dependencies": [{"package": "npm:lodash", "version": "4.17.21", "ecosystem": "npm"}],
         }
@@ -404,6 +468,11 @@ def test_workflow_publishes_only_after_verified_branch_evidence(tmp_path: Path) 
         result = run_workflow(state)
 
     assert result.terminal_status == "completed"
-    assert calls == ["build", "scan", "publish"]
+    assert calls == ["build", "baseline", "scan", "publish"]
+    verification = result.verification_results[0]
+    assert verification["verified"] is True
+    assert verification["rescan_clean"] is False
+    assert verification["remaining_finding_ids"] == ["FND-existing"]
+    assert build_run_report(result).executive_summary.severity_counts_after.total == 1
     assert manifest.read_text(encoding="utf-8") == before
 

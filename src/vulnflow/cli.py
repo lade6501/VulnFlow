@@ -221,7 +221,10 @@ def _print_execution_summary(result: VulnFlowState) -> None:
         evidence = report_snapshot.execution_evidence
         ver = result.verification_results[0]
         if evidence.rescan.value == "executed":
-            clean = console.green("✔ RESOLVED (0 remaining vulnerabilities)") if ver.get("rescan_clean") else console.yellow("⚠ RESIDUAL FINDINGS REMAIN")
+            if ver.get("verified"):
+                clean = console.green("✔ APPROVED FINDINGS RESOLVED (no new findings)")
+            else:
+                clean = console.yellow("⚠ VERIFICATION FAILED")
         else:
             clean = console.yellow("UNKNOWN (no executed rescan evidence)")
         if evidence.tests.value == "executed":

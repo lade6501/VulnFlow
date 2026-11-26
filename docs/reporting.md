@@ -31,7 +31,7 @@ execution success. After-state counts remain null until a successful executed re
 Advisory evidence must match package and ecosystem, cover the installed version, and show that the
 target is outside the affected range or at/after a fixed version. Rejected evidence is retained in
 validation notes. Expected CVEs use validated upstream evidence; verified CVEs additionally require
-an executed clean rescan that resolves the persisted finding identifiers.
+an executed rescan that resolves all approved finding identifiers and detects no new findings compared with the base commit. Reports retain unrelated findings that were already present.
 
 ## AI intelligence boundary
 

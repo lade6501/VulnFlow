@@ -756,12 +756,12 @@ def _root_causes(
                 passed=(
                     bool(
                         state.verification_results
-                        and state.verification_results[0].get("rescan_clean") is True
+                        and state.verification_results[0].get("verified") is True
                     )
                     if execution.rescan == StepState.EXECUTED
                     else None
                 ),
-                details="A clean result is accepted only with an executed rescan audit event.",
+                details="Verification requires an executed rescan with all approved findings resolved and no new findings.",
                 source_event="RESCAN_EXECUTED"
                 if execution.rescan == StepState.EXECUTED
                 else None,
@@ -865,14 +865,10 @@ def _verified_cves(
 ) -> set[str]:
     if execution.rescan != StepState.EXECUTED or not state.verification_results:
         return set()
-    verification = state.verification_results[0]
-    if (
-        verification.get("verified") is not True
-        or verification.get("rescan_clean") is not True
-    ):
-        return set()
     return {
         cve
+        for verification in state.verification_results
+        if verification.get("verified") is True
         for finding_id in verification.get("resolved_finding_ids", [])
         for cve in finding_cves.get(finding_id, set())
     }
@@ -1537,11 +1533,10 @@ def build_run_report(
     after_total: int | None = None
     if execution.rescan == StepState.EXECUTED and state.verification_results:
         verification = state.verification_results[0]
-        after_total = (
-            0
-            if verification.get("rescan_clean") is True
-            else len(verification.get("new_finding_ids", []))
-        )
+        if isinstance(verification.get("remaining_finding_ids"), list):
+            after_total = len(verification["remaining_finding_ids"])
+        elif verification.get("rescan_clean") is True:
+            after_total = 0
     after = (
         SeverityCounts(critical=0, high=0, medium=0, low=0, info=0, total=0)
         if after_total == 0
@@ -1610,10 +1605,13 @@ def build_run_report(
 
     unresolved_ids: tuple[str, ...] = ()
     if execution.rescan == StepState.EXECUTED and state.verification_results:
-        resolved = set(state.verification_results[0].get("resolved_finding_ids", []))
-        unresolved_ids = tuple(
-            finding.id for finding in analyzed if finding.id not in resolved
-        )
+        verification = state.verification_results[0]
+        remaining_ids = verification.get("remaining_finding_ids")
+        if isinstance(remaining_ids, list):
+            unresolved_ids = tuple(remaining_ids)
+        else:
+            resolved = set(verification.get("resolved_finding_ids", []))
+            unresolved_ids = tuple(finding.id for finding in analyzed if finding.id not in resolved)
     unverified = tuple(
         root.package for root in roots if execution.rescan != StepState.EXECUTED
     )
