@@ -693,8 +693,9 @@ class PlannerAgent:
         request = BatchPlannerRequest(plans=trusted_context)
         user_message = (
             "Create concise, repository-specific enrichment for these deterministic plans. "
-            "Use at most three short entries per list and one sentence per text field. Cite only supplied "
-            "chunk IDs. If evidence is insufficient, say so in missing_evidence instead of guessing.\n\n"
+            "Return compact JSON and omit empty optional fields. Use at most three short entries per list "
+            "and one sentence per text field. Cite only supplied chunk IDs. "
+            "If evidence is insufficient, say so in missing_evidence instead of guessing.\n\n"
             f"TRUSTED GRAPH AND PLAN CONTEXT:\n{request.model_dump_json()}\n\n"
             + "\n\n".join(evidence_sections)
         )
@@ -873,6 +874,17 @@ class PlannerAgent:
             stage = "prompt_preparation"
             try:
                 messages = self._batch_prompt(batch)
+                completion_options: dict[str, Any] = {"max_tokens": 5000}
+                if (
+                    provider_name == "nvidia"
+                    and model_name == "nvidia/nemotron-3.5-lightning-30b-a3b"
+                ):
+                    completion_options.update(
+                        chat_template_kwargs={"enable_thinking": False},
+                        max_tokens=None,  # Use NVIDIA's default during testing.
+                        retry_on_length=False,
+                        stream=False,
+                    )
                 stage = "structured_completion"
                 self._llm_calls_this_run += 1
                 self._enrichment_stats["model_calls"] += 1
@@ -882,7 +894,7 @@ class PlannerAgent:
                     response_schema=BatchPlannerOutput,
                     temperature=0.0,
                     max_retries=1,
-                    max_tokens=5000,
+                    **completion_options,
                 )
                 stage = "response_processing"
                 output = response.structured_data

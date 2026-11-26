@@ -117,11 +117,14 @@ def validate_structured_output(
     model: Optional[str] = None,
     max_retries: int = 3,
     temperature: float = 0.0,
+    *,
+    retry_on_length: bool = True,
     **kwargs: Any,
 ) -> LLMResponse:
     """
     Execute an LLM completion with automatic JSON extraction and bounded validation retries.
     If the model produces malformed or invalid JSON, feedback is fed back to the model for correction.
+    Callers that can shrink the request may disable retries after output-token exhaustion.
     """
     active_messages = client._normalize_messages(messages)
 
@@ -145,8 +148,11 @@ def validate_structured_output(
 
     last_error: Optional[str] = None
     request_messages = active_messages
+    attempts_made = 0
+    attempt_limit = max_retries + 1
 
-    for attempt in range(max_retries + 1):
+    while attempts_made < attempt_limit:
+        attempts_made += 1
         response = client.complete(
             messages=request_messages,
             model=model,
@@ -159,7 +165,8 @@ def validate_structured_output(
             response.structured_data = validated
             return response
         except (json.JSONDecodeError, ValueError, TypeError) as exc:
-            if response.finish_reason in {"length", "max_tokens"}:
+            hit_token_limit = response.finish_reason in {"length", "max_tokens"}
+            if hit_token_limit:
                 last_error = "Response reached the output-token limit before it validated"
             elif isinstance(exc, json.JSONDecodeError):
                 last_error = f"JSONDecodeError: {exc.msg} at line {exc.lineno}, column {exc.colno}"
@@ -167,12 +174,15 @@ def validate_structured_output(
                 last_error = f"{type(exc).__name__}: response does not match the required schema"
             logger.warning(
                 "Structured output validation failed on attempt %d/%d: %s",
-                attempt + 1,
-                max_retries + 1,
+                attempts_made,
+                attempt_limit,
                 last_error,
             )
 
-            if attempt < max_retries:
+            if hit_token_limit and not retry_on_length:
+                break
+
+            if attempts_made < attempt_limit:
                 # Retry from the original request without replaying malformed output.
                 request_messages = [
                     *active_messages,
@@ -187,6 +197,6 @@ def validate_structured_output(
                 ]
 
     raise LLMStructuredOutputError(
-        f"Failed to produce structured output adhering to schema after {max_retries + 1} attempts. Last error: {last_error}",
+        f"Failed to produce structured output adhering to schema after {attempts_made} attempts. Last error: {last_error}",
         provider=client.get_provider_name(),
     )
