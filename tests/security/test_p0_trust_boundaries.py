@@ -354,7 +354,10 @@ def test_repository_command_requires_offline_container(tmp_path: Path, monkeypat
         assert SandboxRunner().run_command(["npm", "test"], tmp_path)[0] == 0
     command = run.call_args.args[0]
     assert command[:2] == ["/usr/bin/docker", "run"]
+    owner = tmp_path.stat()
+    assert command[command.index("--user") + 1] == f"{owner.st_uid}:{owner.st_gid}"
     assert "--network=none" in command
+    assert "--cap-drop=ALL" in command
     assert "--pull=never" in command
     assert command[-4:] == ["--entrypoint", "npm", "trusted-build-image", "test"]
 
