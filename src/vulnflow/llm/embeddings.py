@@ -13,7 +13,7 @@ import math
 import os
 import urllib.error
 import urllib.request
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 logger = logging.getLogger("vulnflow.llm.embeddings")
 
@@ -85,7 +85,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
     ) -> None:
         self.model = model
         self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
-        self.base_url = (base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")).rstrip("/")
+        self.base_url = (base_url or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")).rstrip("/")
         self.dimensions = dimensions
         self.timeout = timeout
 
@@ -128,7 +128,7 @@ class OllamaEmbeddingProvider(EmbeddingProvider):
         timeout: float = 30.0,
     ) -> None:
         self.model = model
-        self.base_url = (base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")).rstrip("/")
+        self.base_url = (base_url or os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")).rstrip("/")
         self.dimensions = dimensions
         self.timeout = timeout
 
@@ -161,7 +161,7 @@ def create_embedding_provider(
     **kwargs: Any,
 ) -> EmbeddingProvider:
     """Factory creating the appropriate EmbeddingProvider based on config or availability."""
-    target = (provider or os.getenv("VULNFLOW_EMBEDDING_PROVIDER", "hash")).lower()
+    target = (provider or os.environ.get("VULNFLOW_EMBEDDING_PROVIDER", "hash")).lower()
 
     if target == "openai":
         return OpenAIEmbeddingProvider(model=model or "text-embedding-3-small", **kwargs)

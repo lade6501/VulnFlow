@@ -91,11 +91,11 @@ def parse_and_validate(
         raise ValueError(f"Expected dict to instantiate dataclass {response_schema}, got {type(parsed)}")
 
     # 3. Dict / JSON Schema basic validation
-    if response_schema is dict or response_schema == dict:
+    if response_schema is dict:
         if not isinstance(parsed, dict):
             raise ValueError(f"Expected JSON object (dict), got {type(parsed).__name__}")
         return parsed
-    if response_schema is list or response_schema == list:
+    if response_schema is list:
         if not isinstance(parsed, list):
             raise ValueError(f"Expected JSON array (list), got {type(parsed).__name__}")
         return parsed
@@ -147,7 +147,7 @@ def validate_structured_output(
         )
 
     last_error: Optional[str] = None
-    request_messages = active_messages
+    request_messages: list[LLMMessage | dict[str, str]] = list(active_messages)
     attempts_made = 0
     attempt_limit = max_retries + 1
 

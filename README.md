@@ -62,7 +62,7 @@ VulnFlow AI replaces noisy, duplicate security alerts with an intelligent, 10-no
 
 - **Python**: `3.11`, `3.12`, or `3.13`
 - **Git**: Installed and available on your `PATH`
-- **Node.js & npm** (optional): Needed for npm manifest dependency tests and for running the web UI.
+- **Node.js & npm** (optional): Needed for npm manifest dependency tests and for running the web UI. The UI and its CI job use Node 22 (22.13 or newer), selected by `ui/.nvmrc`.
 - **Security Scanner** (optional): [Trivy](https://github.com/aquasecurity/trivy), Grype, or any scanner outputting JSON or SARIF. (VulnFlow also provides sample scanner reports out of the box).
 
 ---
@@ -371,18 +371,21 @@ Open `http://localhost:5173` in your browser.
 
 ## 🧪 Running Test Suites
 
-VulnFlow maintains a comprehensive test suite across contracts, foundation, and intelligence:
+Install the development tools and run the same Python checks as CI:
 
 ```bash
-# 1. Contract & Phase 0 Gate Tests
-PYTHONPATH=src python3 tests/contract/test_contracts.py
+python -m pip install -e ".[dev]"
+make check
+```
 
-# 2. Phase 1 Core Remediation Spine Tests (F01-F19)
-PYTHONPATH=src python3 tests/integration/test_phase1_spine.py
+Run individual checks with `make lint`, `make test`, or `make test-gate`.
 
-# 3. Phase 2 Intelligence & Advanced Governance Tests (F05-F22)
-PYTHONPATH=src python3 tests/integration/test_phase2_intelligence.py
+To run the UI checks with nvm:
 
-# Or run everything with pytest:
-pytest tests/
+```bash
+cd ui
+nvm install
+npm ci
+npm run lint
+npm run build
 ```

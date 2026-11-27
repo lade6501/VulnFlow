@@ -6,8 +6,7 @@ Prevents secrets in outbound prompts and safely wraps untrusted text.
 from __future__ import annotations
 
 import logging
-import re
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Union
 
 from vulnflow.core.redaction import contains_secrets, find_secrets, redact_secrets
 from vulnflow.llm.base import LLMMessage

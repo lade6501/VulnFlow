@@ -97,7 +97,7 @@ class TrivyAdapter:
                 if isinstance(item, dict):
                     # Check if item has Vulnerabilities inside
                     if "Vulnerabilities" in item:
-                        target_file = item.get("Target", item.get("file_path", "package.json"))
+                        target_file = item.get("Target") or item.get("file_path") or "package.json"
                         for v_idx, vuln in enumerate(item.get("Vulnerabilities", [])):
                             finding = self._parse_vuln(vuln, target_file, self.default_ecosystem, repo, f"{raw_ref}#{idx}/v/{v_idx}")
                             if finding:

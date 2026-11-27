@@ -15,7 +15,6 @@ from typing import Any, Dict, List, Optional, Union
 
 from vulnflow.llm.base import (
     LLMClient,
-    LLMError,
     LLMMessage,
     LLMProviderError,
     LLMResponse,
@@ -38,7 +37,7 @@ class OllamaProvider(LLMClient):
         **kwargs: Any,
     ) -> None:
         super().__init__(default_model=default_model, timeout=timeout, max_retries=max_retries, **kwargs)
-        self.base_url = (base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")).rstrip("/")
+        self.base_url = (base_url or os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")).rstrip("/")
 
     def get_provider_name(self) -> str:
         return "ollama"

@@ -12,7 +12,6 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from vulnflow.contracts.finding import Finding, LocationInfo, SeverityLevel
 from vulnflow.contracts.remediation_plan import RemediationAction, RemediationPlan, RiskTier
 from vulnflow.contracts.state import VulnFlowState
 from vulnflow.llm.base import (
@@ -26,11 +25,11 @@ from vulnflow.llm.base import (
 )
 from vulnflow.llm.factory import GuardedRecorderClient
 from vulnflow.mcp_servers.git_server import git_server
-from vulnflow.observability.audit_log import AuditLogger, audit_logger
+from vulnflow.observability.audit_log import AuditLogger
 from vulnflow.observability.tracing import TraceManager, trace_manager, trace_span
 from vulnflow.orchestrator.approval import ApprovalGate
 from vulnflow.orchestrator.failure_taxonomy import classify_failure
-from vulnflow.orchestrator.graph import VulnFlowWorkflow, run_workflow
+from vulnflow.orchestrator.graph import VulnFlowWorkflow
 from vulnflow.orchestrator.nodes import approve_node
 from vulnflow.orchestrator.retry import retry_with_backoff
 

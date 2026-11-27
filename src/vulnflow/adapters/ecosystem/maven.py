@@ -10,7 +10,7 @@ import logging
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, Tuple
 
 logger = logging.getLogger("vulnflow.adapters.ecosystem.maven")
 

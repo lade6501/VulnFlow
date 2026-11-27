@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
 from vulnflow.adapters.input.trivy import ScannerParseError
 from vulnflow.contracts.finding import (
@@ -53,6 +53,7 @@ class OSVAdapter:
     ) -> List[Finding]:
         """Parse OSV-Scanner JSON data structure into normalized Finding models."""
         findings: List[Finding] = []
+        results: list[dict[str, Any]]
 
         if isinstance(data, list):
             results = [{"packages": data}]

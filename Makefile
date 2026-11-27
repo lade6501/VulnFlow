@@ -1,12 +1,19 @@
 # Makefile
 # Provides developer shortcuts for setup, linting, testing, and container commands.
 
-.PHONY: test lint
+.PHONY: check test lint test-gate
+
+PYTHON ?= python
 
 test:
-	pytest tests
+	$(PYTHON) -m pytest
+
+check: lint test test-gate
 
 lint:
-	ruff check .
-	mypy src
+	$(PYTHON) -m ruff check src api tests evals
+	$(PYTHON) -m mypy
+
+test-gate:
+	LANGCHAIN_TRACING_V2=false $(PYTHON) -m evals.deepeval_suite
 

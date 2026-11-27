@@ -6,16 +6,10 @@ Loads organizational policy definitions from local YAML configuration files.
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Optional, Union
 
-from vulnflow.contracts.policy import (
-    ApprovedPackagesPolicy,
-    PackagePolicyEntry,
-    PolicyRules,
-    PolicyStatus,
-)
+from vulnflow.contracts.policy import ApprovedPackagesPolicy
 
 logger = logging.getLogger("vulnflow.policy.loaders.yaml")
 

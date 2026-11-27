@@ -6,7 +6,6 @@ Retrieves relevant security advisories, changelogs, and release note chunks filt
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -138,7 +137,7 @@ class AdvisoryRetriever:
         # Filter candidate chunks strictly by package
         candidates: List[AdvisoryChunk] = []
         for c in self.chunks:
-            if clean_pkg:
+            if clean_pkg and bare_pkg is not None:
                 if bare_pkg not in c.package and clean_pkg not in c.package:
                     continue
             if target_eco and c.ecosystem.lower() not in (target_eco.lower(), "npm"):

@@ -30,7 +30,7 @@ def retry_with_backoff(
     Execute a callable with exponential backoff retry on transient failures.
     """
     delay = base_delay
-    last_exc: Optional[Exception] = None
+    last_exc: Exception | None = None
 
     for attempt in range(1, max_retries + 1):
         try:

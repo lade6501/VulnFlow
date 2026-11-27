@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple, Type, Union
+from typing import Any, Dict, List, Optional, Type, Union
 
 from vulnflow.config import settings
 from vulnflow.llm.base import LLMClient, LLMMessage, LLMResponse
@@ -128,7 +128,7 @@ class GuardedRecorderClient(LLMClient):
 
         # 1. Apply Redaction Guard if enabled
         if self.guard:
-            messages = self.guard.sanitize_messages(messages)
+            messages = list(self.guard.sanitize_messages(messages))
 
         # 2. Check recorder replay mode
         if self.recorder and self.recorder.mode in ("REPLAY", "AUTO"):

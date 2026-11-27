@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from vulnflow.mcp_servers.external import jira_mcp_bridge
 from vulnflow.mcp_servers.fastmcp import FastMCP

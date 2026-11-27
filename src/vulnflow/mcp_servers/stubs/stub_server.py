@@ -10,7 +10,6 @@ from typing import Any, Dict, List, Optional
 
 from vulnflow.contracts.finding import Finding, FindingType, LocationInfo, SeverityLevel
 from vulnflow.contracts.policy import PolicyStatus
-from vulnflow.contracts.remediation_plan import PolicyResult
 
 logger = logging.getLogger("vulnflow.mcp_servers.stubs")
 

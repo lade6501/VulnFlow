@@ -7,15 +7,15 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 
 # Add src to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 
 from vulnflow.adapters.ecosystem.npm import NPMAdapter
-from vulnflow.adapters.input.trivy import TrivyAdapter
-from vulnflow.agents.fixer import FixerAgent, default_fixer_agent
+from vulnflow.agents.fixer import FixerAgent
 from vulnflow.agents.planner import PlannerAgent, default_planner_agent
-from vulnflow.agents.rootcause import RootCauseAgent, default_rootcause_agent
+from vulnflow.agents.rootcause import RootCauseAgent
 from vulnflow.agents.verifier import default_verifier_agent
 from vulnflow.contracts.finding import Finding, FindingType, LocationInfo, SeverityLevel
 from vulnflow.contracts.policy import PolicyStatus
@@ -23,15 +23,12 @@ from vulnflow.contracts.remediation_plan import (
     RemediationAction,
     RemediationPlan,
     RiskTier,
-    VerificationResult,
 )
 from vulnflow.contracts.state import VulnFlowState
 from vulnflow.knowledge.graph.build_from_tree import (
-    DependencyGraph,
     build_graph_from_manifest,
-    build_graph_from_tree_dict,
 )
-from vulnflow.knowledge.graph.queries import find_blast_radius, find_root_cause
+from vulnflow.knowledge.graph.queries import find_root_cause
 from vulnflow.core.risk import (
     calculate_risk_tier,
     classify_semver_bump,
@@ -41,11 +38,9 @@ from vulnflow.mcp_servers.knowledge_server import (
     advisory_search as mcp_advisory_search,
     blast_radius as mcp_blast_radius,
     graph_query,
-    root_cause as mcp_root_cause,
 )
 from vulnflow.mcp_servers.registry_server import registry_check, registry_server
-from vulnflow.mcp_servers.ticket_server import ticket_server
-from vulnflow.orchestrator.approval import global_approval_gate, load_run_state, save_run_state
+from vulnflow.orchestrator.approval import global_approval_gate, load_run_state
 from vulnflow.orchestrator.graph import run_workflow
 from vulnflow.reporting.json_report import generate_json_report, write_json_report
 from vulnflow.reporting.markdown import generate_markdown_report, write_markdown_report

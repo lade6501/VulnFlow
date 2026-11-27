@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Optional, Set
 
 from vulnflow.contracts.policy import PolicyStatus
 from vulnflow.policy.loaders.yaml_loader import parse_simple_yaml

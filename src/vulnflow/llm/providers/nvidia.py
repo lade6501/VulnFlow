@@ -43,7 +43,7 @@ class NvidiaProvider(LLMClient):
         super().__init__(default_model=default_model, timeout=timeout, max_retries=max_retries, **kwargs)
         self.api_key = api_key or os.getenv("NVIDIA_API_KEY") or os.getenv("NVCF_AUTH_TOKEN", "")
         self.base_url = (
-            base_url or os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
+            base_url or os.environ.get("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
         ).rstrip("/")
 
     def get_provider_name(self) -> str:

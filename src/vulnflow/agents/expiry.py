@@ -8,12 +8,9 @@ from __future__ import annotations
 import datetime
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from vulnflow.contracts.finding import Finding, FindingType, LocationInfo, SeverityLevel
-from vulnflow.contracts.remediation_plan import RemediationAction, RemediationPlan, RiskTier
 from vulnflow.mcp_servers.ticket_server import ticket_server
 from vulnflow.policy.loaders.yaml_loader import parse_simple_yaml
 

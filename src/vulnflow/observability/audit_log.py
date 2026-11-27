@@ -159,7 +159,7 @@ class AuditLogger:
             if ev.get("previous_hash") != expected_prev:
                 return (
                     False,
-                    f"Hash chain broken at index {idx}: previous_hash {ev.get('previous_hash')[:12]} "
+                    f"Hash chain broken at index {idx}: previous_hash {str(ev.get('previous_hash'))[:12]} "
                     f"does not match expected {expected_prev[:12]}",
                 )
 
@@ -174,7 +174,7 @@ class AuditLogger:
             if ev.get("entry_hash") != computed:
                 return (
                     False,
-                    f"Tampered record at index {idx}: entry_hash {ev.get('entry_hash')[:12]} "
+                    f"Tampered record at index {idx}: entry_hash {str(ev.get('entry_hash'))[:12]} "
                     f"does not match recomputed hash {computed[:12]}",
                 )
 

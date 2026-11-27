@@ -44,7 +44,7 @@ class OpenAIProvider(LLMClient):
     ) -> None:
         super().__init__(default_model=default_model, timeout=timeout, max_retries=max_retries, **kwargs)
         self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
-        self.base_url = (base_url or os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")).rstrip("/")
+        self.base_url = (base_url or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")).rstrip("/")
         self.organization = organization or os.getenv("OPENAI_ORG_ID")
         self.project = project or os.getenv("OPENAI_PROJECT_ID")
 

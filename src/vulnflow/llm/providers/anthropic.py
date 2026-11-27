@@ -43,7 +43,7 @@ class AnthropicProvider(LLMClient):
     ) -> None:
         super().__init__(default_model=default_model, timeout=timeout, max_retries=max_retries, **kwargs)
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY", "")
-        self.base_url = (base_url or os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1")).rstrip("/")
+        self.base_url = (base_url or os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1")).rstrip("/")
         self.anthropic_version = anthropic_version
 
     def get_provider_name(self) -> str:
@@ -84,11 +84,11 @@ class AnthropicProvider(LLMClient):
 
         # Merge multiple consecutive messages with same role if needed
         merged_messages: List[Dict[str, Any]] = []
-        for msg in anthropic_messages:
-            if merged_messages and merged_messages[-1]["role"] == msg["role"]:
-                merged_messages[-1]["content"] += "\n\n" + msg["content"]
+        for message in anthropic_messages:
+            if merged_messages and merged_messages[-1]["role"] == message["role"]:
+                merged_messages[-1]["content"] += "\n\n" + message["content"]
             else:
-                merged_messages.append(msg)
+                merged_messages.append(message)
 
         payload_dict: Dict[str, Any] = {
             "model": active_model,

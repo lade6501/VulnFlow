@@ -5,7 +5,6 @@ MCP tool server querying npm, PyPI, and Maven registries for package versions.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import urllib.error

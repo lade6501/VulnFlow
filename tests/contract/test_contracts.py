@@ -29,11 +29,9 @@ from vulnflow.contracts.remediation_plan import (
     RemediationAction,
     RemediationPlan,
     RiskTier,
-    VerificationResult,
 )
 from vulnflow.contracts.state import VulnFlowState
 from vulnflow.mcp_servers.stubs import stub_mcp
-from vulnflow.observability.audit_log import audit_logger
 from vulnflow.orchestrator.graph import run_workflow
 
 

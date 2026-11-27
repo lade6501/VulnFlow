@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Any, List, Optional
+from typing import Any
 
 
 def _supports_color() -> bool:

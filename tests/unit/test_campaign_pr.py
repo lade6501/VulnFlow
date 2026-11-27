@@ -154,9 +154,9 @@ def test_fix_node_batches_multiple_dependencies_into_campaign_branch(tmp_path: P
 
     # Assert both plans were applied to the campaign branch
     assert len(final_state.patches) == 2
-    for patch in final_state.patches:
-        assert patch["branch"] == expected_branch
-        assert patch["is_campaign"] is True
+    for applied_patch in final_state.patches:
+        assert applied_patch["branch"] == expected_branch
+        assert applied_patch["is_campaign"] is True
 
     # Check git log on the campaign branch
     log_res = subprocess.run(

@@ -8,9 +8,9 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
-from vulnflow.contracts.finding import Finding, FindingType
+from vulnflow.contracts.finding import Finding
 from vulnflow.contracts.remediation_plan import RemediationAction, RemediationPlan, RiskTier
 from vulnflow.core.redaction import redact_secrets
 
@@ -98,7 +98,6 @@ class SecretsAgent:
                 if not m:
                     continue
                 var_name = m.group("var_name").lower()
-                val = m.group("val").lower()
                 line_lower = line.lower()
 
                 if "slack" in clean_rule and ("slack" in var_name or "slack.com" in line_lower):
@@ -174,10 +173,10 @@ class SecretsAgent:
         # Step-by-step security rotation checklist
         checklist = [
             f"1. Revoke the exposed {rule_id} credential immediately in the upstream provider.",
-            f"2. Issue a replacement credential and store securely in a vault (e.g., AWS Secrets Manager, Vault, GitHub Secrets).",
+            "2. Issue a replacement credential and store securely in a vault (e.g., AWS Secrets Manager, Vault, GitHub Secrets).",
             f"3. Refactor {file_path} to read the secret from an environment variable instead of hardcoding.",
-            f"4. If this commit is pushed, rotate all other keys associated with this service account.",
-            f"5. Scrub repository history using git-filter-repo or BFG Repo-Cleaner if public.",
+            "4. If this commit is pushed, rotate all other keys associated with this service account.",
+            "5. Scrub repository history using git-filter-repo or BFG Repo-Cleaner if public.",
         ]
 
         file_ext = Path(file_path).suffix if file_path else ""

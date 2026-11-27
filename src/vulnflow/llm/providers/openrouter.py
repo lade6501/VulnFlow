@@ -45,7 +45,7 @@ class OpenRouterProvider(LLMClient):
         super().__init__(default_model=default_model, timeout=timeout, max_retries=max_retries, **kwargs)
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY", "")
         self.base_url = (
-            base_url or os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+            base_url or os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
         ).rstrip("/")
         self.site_url = site_url
         self.site_name = site_name

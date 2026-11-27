@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -17,18 +16,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 
 from vulnflow.adapters.ecosystem.npm import NPMAdapter
 from vulnflow.adapters.input.sarif import SARIFAdapter
-from vulnflow.adapters.input.trivy import ScannerParseError, TrivyAdapter
+from vulnflow.adapters.input.trivy import TrivyAdapter
 from vulnflow.agents.planner import PlannerAgent, default_planner_agent
 from vulnflow.contracts.finding import Finding, FindingType, LocationInfo, SeverityLevel
 from vulnflow.contracts.policy import PolicyStatus
 from vulnflow.contracts.remediation_plan import RemediationAction, RiskTier
 from vulnflow.contracts.state import VulnFlowState
 from vulnflow.core.dedupe import DeduplicationEngine
-from vulnflow.mcp_servers.build_server import build_server
 from vulnflow.mcp_servers.git_server import git_server
 from vulnflow.mcp_servers.policy_server import policy_candidates, policy_check
 from vulnflow.orchestrator.graph import run_workflow
-from vulnflow.policy.engine import PolicyEngine
 from vulnflow.reporting.pr_comment import format_pr_body
 from vulnflow.sandbox.runner import SandboxRunner
 

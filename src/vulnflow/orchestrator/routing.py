@@ -6,7 +6,6 @@ Defines conditional routing logic across workflow states based on risk.
 from __future__ import annotations
 
 from vulnflow.contracts.policy import PolicyStatus
-from vulnflow.contracts.remediation_plan import RiskTier
 from vulnflow.contracts.state import VulnFlowState
 
 

@@ -5,7 +5,6 @@ AWS Bedrock provider adapter.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import time
@@ -14,11 +13,10 @@ from typing import Any, Dict, List, Optional, Union
 from vulnflow.llm.base import (
     LLMAuthenticationError,
     LLMClient,
-    LLMError,
     LLMMessage,
     LLMProviderError,
+    LLMRateLimitError,
     LLMResponse,
-    LLMTimeoutError,
     LLMUsage,
 )
 

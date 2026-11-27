@@ -20,8 +20,6 @@ for _p in (str(_SRC_DIR), str(_REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-logger = logging.getLogger("vulnflow.api")
-
 from api.routes.approvals import list_pending_approvals, submit_approval
 from api.routes.graph import get_graph_data
 from api.routes.runs import (
@@ -41,6 +39,13 @@ from api.security import (
     validate_run_payload,
     webhook_signature_valid,
 )
+from vulnflow.contracts.approval import (
+    ApprovalDecisionRequest,
+    ApprovalDecisionResponse,
+    PendingApprovalListResponse,
+)
+
+logger = logging.getLogger("vulnflow.api")
 
 
 async def _bounded_request_body(request: Any) -> bytes:
@@ -50,11 +55,6 @@ async def _bounded_request_body(request: Any) -> bytes:
             raise RequestBodyTooLarge("Payload is too large")
         body.extend(chunk)
     return bytes(body)
-from vulnflow.contracts.approval import (
-    ApprovalDecisionRequest,
-    ApprovalDecisionResponse,
-    PendingApprovalListResponse,
-)
 
 try:
     from fastapi import FastAPI, HTTPException, Request
@@ -284,12 +284,12 @@ except ImportError:
                     await self._send_json(send, 202, result)
                 elif path == "/api/approvals" and method == "GET":
                     repo_arg = params.get("repo", [""])[0]
-                    result = PendingApprovalListResponse(
+                    approvals = PendingApprovalListResponse(
                         plans=list_pending_approvals(
                             repo_path=validate_repo_path(repo_arg) if repo_arg else None
                         )
                     )
-                    await self._send_json(send, 200, result)
+                    await self._send_json(send, 200, approvals)
                 elif path.startswith("/api/approvals/") and method == "POST":
                     if not mutation_authorized(self._headers(scope)):
                         await self._send_json(send, 401, {"error": "Unauthorized"})
@@ -301,7 +301,7 @@ except ImportError:
                     except ValidationError as exc:
                         await self._send_json(send, 422, {"detail": exc.errors()})
                         return
-                    result = submit_approval(
+                    decision = submit_approval(
                         plan_id=plan_id,
                         approved=request_model.approved,
                         reviewer=request_model.reviewer,
@@ -310,7 +310,7 @@ except ImportError:
                         repo_path=validate_repo_path(request_model.repo_path),
                         resume=request_model.resume,
                     )
-                    await self._send_json(send, 200, result)
+                    await self._send_json(send, 200, decision)
                 elif path == "/api/graph" and method == "GET":
                     pkg = params.get("package", ["npm:lodash"])[0]
                     repo = params.get("repo", ["workspace"])[0]

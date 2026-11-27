@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Generator, List, Optional
 
 from vulnflow.core.redaction import redact_secrets, redact_structure
+from vulnflow.observability.langsmith_tracer import langsmith_tracer as langsmith_tracer
 
 logger = logging.getLogger("vulnflow.observability.tracing")
 
@@ -153,8 +154,6 @@ class TraceManager:
 # Global tracer instance
 global_tracer = TraceManager()
 trace_manager = global_tracer
-
-from vulnflow.observability.langsmith_tracer import langsmith_tracer
 
 
 def trace_span(

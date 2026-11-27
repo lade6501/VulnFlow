@@ -9,7 +9,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
 from vulnflow.adapters.input.trivy import ScannerParseError
 from vulnflow.contracts.finding import (
@@ -65,7 +65,6 @@ class GitleaksAdapter:
             desc = item.get("Description") or item.get("description", "Exposed Secret or Token")
             file_path = item.get("File") or item.get("file", "unknown")
             start_line = item.get("StartLine") or item.get("line") or 1
-            end_line = item.get("EndLine") or start_line
             col = item.get("StartColumn") or 1
 
             # Strict rule: Secret value NEVER reaches Finding or traces

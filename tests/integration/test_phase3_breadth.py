@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -16,7 +15,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from api.routes.approvals import submit_approval
 from api.routes.runs import get_run, list_runs
 from api.routes.webhooks import handle_scan_webhook
 from vulnflow.adapters.ci.github_action.adapter import GitHubActionAdapter
@@ -36,7 +34,6 @@ from vulnflow.contracts.remediation_plan import RemediationAction, RiskTier
 from vulnflow.contracts.state import VulnFlowState
 from vulnflow.orchestrator.graph import run_workflow
 from vulnflow.policy.licenses import default_license_checker
-from vulnflow.store.run_store import default_run_store
 
 # Ensure deterministic execution in test suite
 default_planner_agent.enable_llm = False

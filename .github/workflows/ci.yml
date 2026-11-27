@@ -37,14 +37,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Run Ruff Lint
-        run: |
-          ruff check src tests evals
+      - name: Run Ruff and Mypy
+        run: make lint
 
       - name: Run Full Pytest Suite (Unit, Contract, Integration Phases 1-4, Security)
-        run: |
-          PYTHONPATH=src pytest tests
+        run: make test
 
       - name: Run DeepEval CI Gate
-        run: |
-          PYTHONPATH=src python3 evals/deepeval_suite.py
+        run: make test-gate
+
+  ui:
+    name: UI Lint & Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ui/.nvmrc
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
