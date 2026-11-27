@@ -120,10 +120,12 @@ class OpenAIProvider(LLMClient):
                     status_code=status_code,
                 ) from exc
             elif status_code == 429:
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
                 raise LLMRateLimitError(
                     f"OpenAI Rate limit exceeded ({status_code}): {err_body}",
                     provider=self.get_provider_name(),
                     status_code=status_code,
+                    retry_after=float(retry_after) if retry_after and retry_after.replace(".", "", 1).isdigit() else None,
                 ) from exc
             elif status_code >= 500:
                 raise LLMProviderError(

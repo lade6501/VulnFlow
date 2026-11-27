@@ -75,6 +75,16 @@ class LangSmithConfig:
 
 
 @dataclass
+class ObservabilityConfig:
+    """Retention, redaction, and timeout defaults for unattended operation."""
+
+    trace_retention_days: int = 30
+    audit_retention_days: int = 90
+    redaction_level: str = "strict"  # strict | standard
+    workflow_timeout_seconds: float = 900.0
+
+
+@dataclass
 class VulnFlowConfig:
     """Master runtime configuration for VulnFlow system components."""
 
@@ -82,6 +92,7 @@ class VulnFlowConfig:
     log_level: str = "INFO"
     llm: LLMProviderConfig = field(default_factory=LLMProviderConfig)
     langsmith: LangSmithConfig = field(default_factory=LangSmithConfig)
+    observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     provider_models: Dict[str, str] = field(default_factory=dict)
     role_models: Dict[str, str] = field(default_factory=dict)
     role_providers: Dict[str, str] = field(default_factory=dict)
@@ -247,11 +258,19 @@ class VulnFlowConfig:
             endpoint=ls_endpoint,
         )
 
+        obs_config = ObservabilityConfig(
+            trace_retention_days=int(os.getenv("VULNFLOW_TRACE_RETENTION_DAYS", "30")),
+            audit_retention_days=int(os.getenv("VULNFLOW_AUDIT_RETENTION_DAYS", "90")),
+            redaction_level=os.getenv("VULNFLOW_REDACTION_LEVEL", "strict").lower(),
+            workflow_timeout_seconds=float(os.getenv("VULNFLOW_WORKFLOW_TIMEOUT_SECONDS", "900.0")),
+        )
+
         return cls(
             env=env,
             log_level=log_level,
             llm=llm_config,
             langsmith=langsmith_config,
+            observability=obs_config,
             provider_models=provider_models,
             role_models=role_models,
             role_providers=role_providers,
@@ -299,6 +318,7 @@ class VulnFlowConfig:
         self.log_level = new_cfg.log_level
         self.llm = new_cfg.llm
         self.langsmith = new_cfg.langsmith
+        self.observability = new_cfg.observability
         self.provider_models = new_cfg.provider_models
         self.role_models = new_cfg.role_models
         self.role_providers = new_cfg.role_providers

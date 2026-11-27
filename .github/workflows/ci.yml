@@ -1,5 +1,5 @@
 # .github/workflows/ci.yml
-# Runs the Python test suite on pull requests and pushes.
+# Runs automated linting, test suites, security gates, and DeepEval checks on PRs and pushes.
 
 name: CI
 
@@ -16,7 +16,7 @@ on:
 
 jobs:
   test:
-    name: Test Suite (Python ${{ matrix.python-version }})
+    name: Test & Security Gate (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -32,10 +32,19 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install Package
+      - name: Install Package & Dev Tools
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          pip install -e ".[dev]"
 
-      - name: Run tests
-        run: python -m pytest -q
+      - name: Run Ruff Lint
+        run: |
+          ruff check src tests evals
+
+      - name: Run Full Pytest Suite (Unit, Contract, Integration Phases 1-4, Security)
+        run: |
+          PYTHONPATH=src pytest tests
+
+      - name: Run DeepEval CI Gate
+        run: |
+          PYTHONPATH=src python3 evals/deepeval_suite.py

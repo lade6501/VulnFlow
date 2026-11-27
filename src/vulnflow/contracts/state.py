@@ -175,24 +175,23 @@ class VulnFlowState:
         return state
 
     def append_audit(self, event_type: str, actor: str, payload: Dict[str, Any]) -> None:
-        """Append an event to the state's audit trail and central persistent audit log."""
-        import time
+        """Append a secret-redacted event to the state's audit trail and persistent audit log."""
         from vulnflow.observability.audit_log import audit_logger
 
-        event_dict = {
-            "timestamp": time.time(),
-            "run_id": self.run_id,
-            "node": self.current_node,
-            "event_type": event_type,
-            "actor": actor,
-            "payload": payload,
-        }
         persisted_event = audit_logger.log(
             run_id=self.run_id,
             event_type=event_type,
             actor=actor,
             payload={"node": self.current_node, **payload},
         )
-        event_dict["previous_hash"] = persisted_event.previous_hash
-        event_dict["entry_hash"] = persisted_event.entry_hash
+        event_dict = {
+            "timestamp": persisted_event.timestamp,
+            "run_id": self.run_id,
+            "node": self.current_node,
+            "event_type": event_type,
+            "actor": persisted_event.actor,
+            "payload": persisted_event.payload,
+            "previous_hash": persisted_event.previous_hash,
+            "entry_hash": persisted_event.entry_hash,
+        }
         self.audit_events.append(event_dict)

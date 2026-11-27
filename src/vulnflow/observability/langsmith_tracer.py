@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 
 # Ensure .env is loaded before inspecting environment variables
 from vulnflow.core import dotenv
+from vulnflow.core.redaction import redact_secrets, redact_structure
 
 logger = logging.getLogger("vulnflow.observability.langsmith")
 
@@ -203,13 +204,13 @@ class LangSmithTracer:
             "name": name,
             "run_type": "chain",
             "start_time": now_iso,
-            "inputs": inputs or {},
+            "inputs": redact_structure(inputs or {}),
             "tags": list(tags or []) + ["vulnflow", "autonomous-remediation"],
             "extra": {
-                "metadata": {
+                "metadata": redact_structure({
                     "vulnflow_run_id": run_id,
                     **(metadata or {}),
-                },
+                }),
                 "project_name": self.project,
             },
             "session_name": self.project,
@@ -239,14 +240,17 @@ class LangSmithTracer:
         trace_uuid = run_info["uuid"]
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
+        safe_outputs = redact_structure({
+            "status": status,
+            **(outputs or {}),
+        })
+        safe_error = redact_secrets(error) if error else None
+
         # 1. Direct PATCH payload adhering strictly to LangSmith RunUpdate schema (no "id" field in body)
         patch_data = {
             "end_time": now_iso,
-            "outputs": {
-                "status": status,
-                **(outputs or {}),
-            },
-            "error": error,
+            "outputs": safe_outputs,
+            "error": safe_error,
         }
 
         # Primary PATCH endpoint (/runs/{id})
@@ -258,11 +262,8 @@ class LangSmithTracer:
                 {
                     "id": trace_uuid,
                     "end_time": now_iso,
-                    "outputs": {
-                        "status": status,
-                        **(outputs or {}),
-                    },
-                    "error": error,
+                    "outputs": safe_outputs,
+                    "error": safe_error,
                 }
             ]
         }
@@ -294,9 +295,9 @@ class LangSmithTracer:
             "run_type": "tool",
             "start_time": start_dt.isoformat(),
             "end_time": end_dt.isoformat(),
-            "inputs": inputs or {},
-            "outputs": outputs or {},
-            "error": error,
+            "inputs": redact_structure(inputs or {}),
+            "outputs": redact_structure(outputs or {}),
+            "error": redact_secrets(error) if error else None,
             "parent_run_id": parent_uuid,
             "tags": list(tags or []) + ["node", node_name],
             "extra": {

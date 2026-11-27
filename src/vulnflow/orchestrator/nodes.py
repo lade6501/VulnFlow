@@ -518,26 +518,48 @@ def approve_node(state: VulnFlowState) -> VulnFlowState:
             ):
                 approved.append(p)
                 p.requires_approval = False
+                dec = (
+                    approval_result.get("decision")
+                    if isinstance(approval_result, dict)
+                    and isinstance(approval_result.get("decision"), dict)
+                    else global_approval_gate.get_decision(
+                        p.id, repo_path=state.repo_path
+                    )
+                ) or {}
+                reviewer = str(dec.get("reviewer") or "human-reviewer")
                 state.append_audit(
                     "PLAN_MANUALLY_APPROVED",
-                    "approval_gate",
+                    reviewer,
                     {
                         "plan_id": p.id,
                         "target_package": p.target_package,
                         "risk_tier": tier_val,
+                        "reviewer": reviewer,
+                        "reviewer_group": dec.get("reviewer_group", "security"),
+                        "reason": dec.get("reason", "Approved by reviewer"),
                     },
                 )
             elif approval_status == "rejected" or global_approval_gate.is_rejected(
                 p.id, repo_path=state.repo_path
             ):
                 rejected.append(p)
-                dec = global_approval_gate.get_decision(p.id, repo_path=state.repo_path)
+                dec = (
+                    approval_result.get("decision")
+                    if isinstance(approval_result, dict)
+                    and isinstance(approval_result.get("decision"), dict)
+                    else global_approval_gate.get_decision(
+                        p.id, repo_path=state.repo_path
+                    )
+                ) or {}
+                reviewer = str(dec.get("reviewer") or "human-reviewer")
                 state.append_audit(
                     "PLAN_MANUALLY_REJECTED",
-                    "approval_gate",
+                    reviewer,
                     {
                         "plan_id": p.id,
                         "target_package": p.target_package,
+                        "reviewer": reviewer,
+                        "reviewer_group": dec.get("reviewer_group", "security"),
                         "reason": dec.get("reason"),
                     },
                 )

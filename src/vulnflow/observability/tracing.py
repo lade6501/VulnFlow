@@ -12,6 +12,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, Generator, List, Optional
 
+from vulnflow.core.redaction import redact_secrets, redact_structure
+
 logger = logging.getLogger("vulnflow.observability.tracing")
 
 
@@ -51,7 +53,7 @@ class TraceManager:
             span_id=span_id,
             parent_id=parent_id,
             start_time=time.time(),
-            attributes=dict(attributes or {}),
+            attributes=redact_structure(dict(attributes or {})),
         )
         self._active_stack.append(record)
         self.spans.append(record)
@@ -61,14 +63,54 @@ class TraceManager:
             record.status = "OK"
         except Exception as exc:
             record.status = "ERROR"
-            record.error_message = str(exc)
+            record.error_message = redact_secrets(str(exc))
             record.attributes["error.type"] = exc.__class__.__name__
             raise
         finally:
+            record.attributes = redact_structure(record.attributes)
             record.end_time = time.time()
             record.duration_ms = round((record.end_time - record.start_time) * 1000.0, 2)
             if self._active_stack and self._active_stack[-1].span_id == span_id:
                 self._active_stack.pop()
+
+    def record_tool_call(
+        self,
+        tool_name: str,
+        attributes: Optional[Dict[str, Any]] = None,
+        duration_ms: float = 0.0,
+        status: str = "OK",
+        error: Optional[str] = None,
+    ) -> SpanRecord:
+        """Record an MCP tool invocation span with secret-redacted attributes."""
+        span_id = uuid.uuid4().hex[:16]
+        parent_id = self._active_stack[-1].span_id if self._active_stack else None
+        end_time = time.time()
+        start_time = end_time - (duration_ms / 1000.0)
+        safe_attrs = redact_structure(dict(attributes or {}))
+        safe_attrs["tool.name"] = tool_name
+
+        record = SpanRecord(
+            name=f"mcp.tool.{tool_name}",
+            span_id=span_id,
+            parent_id=parent_id,
+            start_time=start_time,
+            end_time=end_time,
+            duration_ms=duration_ms,
+            status=status,
+            error_message=redact_secrets(error) if error else None,
+            attributes=safe_attrs,
+        )
+        self.spans.append(record)
+        return record
+
+    def prune_spans(self, retention_days: int = 30) -> int:
+        """Remove in-memory trace spans older than retention_days."""
+        if retention_days <= 0:
+            return 0
+        cutoff = time.time() - (retention_days * 86400)
+        before = len(self.spans)
+        self.spans = [s for s in self.spans if s.start_time >= cutoff]
+        return before - len(self.spans)
 
     def record_llm_call(
         self,
@@ -95,7 +137,7 @@ class TraceManager:
             end_time=end_time,
             duration_ms=latency_ms,
             status=status,
-            error_message=error,
+            error_message=redact_secrets(error) if error else None,
             attributes={
                 "llm.provider": provider,
                 "llm.model": model,

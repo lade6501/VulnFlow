@@ -6,7 +6,7 @@ Redacts secrets, tokens, and credentials from findings and agent logs.
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Pattern, Tuple
+from typing import Any, Dict, List, Pattern, Tuple
 
 # Comprehensive regex patterns for credentials, tokens, and private keys
 SECRET_PATTERNS: Dict[str, Pattern[str]] = {
@@ -17,6 +17,8 @@ SECRET_PATTERNS: Dict[str, Pattern[str]] = {
     "GITHUB_TOKEN": re.compile(
         r"\b(?:ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|ghu_[a-zA-Z0-9]{36}|ghs_[a-zA-Z0-9]{36}|ghr_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{82})\b"
     ),
+    "NVIDIA_API_KEY": re.compile(r"\bnvapi-[a-zA-Z0-9_-]{20,}\b"),
+    "OPENAI_OR_ANTHROPIC_KEY": re.compile(r"\bsk-(?:ant-)?[a-zA-Z0-9_-]{20,}\b"),
     "SLACK_TOKEN": re.compile(r"\bxox[baprs]-[0-9a-zA-Z]{10,48}\b"),
     "PRIVATE_KEY": re.compile(
         r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
@@ -95,3 +97,23 @@ def redact_secrets(text: str, mask_template: str = "[REDACTED_SECRET:{type}]") -
         sanitized = pattern.sub(_replace_match, sanitized)
 
     return sanitized
+
+
+def redact_structure(
+    value: Any,
+    mask_template: str = "[REDACTED_SECRET:{type}]",
+) -> Any:
+    """Recursively redact secrets inside nested dicts, lists, tuples, and strings."""
+    if isinstance(value, str):
+        return redact_secrets(value, mask_template=mask_template)
+    if isinstance(value, dict):
+        return {
+            redact_structure(k, mask_template=mask_template) if isinstance(k, str) else k:
+            redact_structure(v, mask_template=mask_template)
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_structure(item, mask_template=mask_template) for item in value]
+    if isinstance(value, tuple):
+        return tuple(redact_structure(item, mask_template=mask_template) for item in value)
+    return value

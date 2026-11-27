@@ -75,10 +75,17 @@ class LLMResponse:
 class LLMError(Exception):
     """Base exception for all LLM client failures."""
 
-    def __init__(self, message: str, provider: str = "", status_code: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        provider: str = "",
+        status_code: Optional[int] = None,
+        retry_after: Optional[float] = None,
+    ) -> None:
         super().__init__(message)
         self.provider = provider
         self.status_code = status_code
+        self.retry_after = retry_after
 
 
 class LLMAuthenticationError(LLMError):
@@ -135,6 +142,43 @@ class LLMClient(abc.ABC):
     ) -> LLMResponse:
         """Execute a completion request against the LLM provider."""
         raise NotImplementedError
+
+    def complete_with_retry(
+        self,
+        messages: List[Union[LLMMessage, Dict[str, str]]],
+        model: Optional[str] = None,
+        temperature: float = 0.0,
+        max_tokens: Optional[int] = None,
+        base_delay: float = 0.5,
+        max_delay: float = 8.0,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        """Execute completion with bounded exponential backoff on rate limits, timeouts, and 5xx errors."""
+        import random
+
+        attempts = max(1, int(self.max_retries))
+        delay = base_delay
+        for attempt in range(1, attempts + 1):
+            try:
+                return self.complete(
+                    messages=messages,
+                    model=model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    **kwargs,
+                )
+            except (LLMRateLimitError, LLMTimeoutError, LLMProviderError) as exc:
+                if attempt >= attempts:
+                    raise
+                retry_hint = getattr(exc, "retry_after", None)
+                wait_seconds = (
+                    min(float(retry_hint), max_delay)
+                    if retry_hint is not None and retry_hint >= 0
+                    else min(delay * random.uniform(0.8, 1.2), max_delay)
+                )
+                time.sleep(wait_seconds)
+                delay *= 2.0
+        raise RuntimeError("Unreachable retry state")
 
     def structured_complete(
         self,

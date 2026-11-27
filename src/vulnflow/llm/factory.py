@@ -147,8 +147,8 @@ class GuardedRecorderClient(LLMClient):
                     f"No recorded fixture found in REPLAY mode for {self.get_provider_name()}:{active_model}"
                 )
 
-        # 3. Call underlying provider client
-        response = self.inner_client.complete(
+        # 3. Call underlying provider client with bounded rate-limit/timeout retries
+        response = self.inner_client.complete_with_retry(
             messages=messages,
             model=active_model,
             temperature=temperature,

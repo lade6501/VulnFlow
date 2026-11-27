@@ -15,6 +15,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from vulnflow.core.redaction import redact_structure
+
 logger = logging.getLogger("vulnflow.observability.audit_log")
 
 
@@ -76,14 +78,16 @@ class AuditLogger:
         actor: str,
         payload: Dict[str, Any],
     ) -> AuditEvent:
-        """Create and record an audit event with cryptographic hash chaining."""
+        """Create and record a secret-redacted audit event with cryptographic hash chaining."""
+        safe_payload = redact_structure(payload)
+        safe_actor = redact_structure(actor)
         prev_hash = self._last_hash.get(run_id, "0" * 64)
         ts = time.time()
         entry_hash = compute_event_hash(
             run_id=run_id,
             event_type=event_type,
-            actor=actor,
-            payload=payload,
+            actor=safe_actor,
+            payload=safe_payload,
             timestamp=ts,
             previous_hash=prev_hash,
         )
@@ -91,8 +95,8 @@ class AuditLogger:
         event = AuditEvent(
             run_id=run_id,
             event_type=event_type,
-            actor=actor,
-            payload=payload,
+            actor=safe_actor,
+            payload=safe_payload,
             timestamp=ts,
             previous_hash=prev_hash,
             entry_hash=entry_hash,
@@ -103,9 +107,9 @@ class AuditLogger:
             "AUDIT [%s] %s by %s (hash: %s): %s",
             run_id,
             event_type,
-            actor,
+            safe_actor,
             entry_hash[:12],
-            payload,
+            safe_payload,
         )
 
         if self.log_dir:
@@ -192,6 +196,21 @@ class AuditLogger:
                 "entry_hash": e.entry_hash[:12] if e.entry_hash else "",
             })
         return timeline
+
+    def prune_expired_logs(self, retention_days: int = 90) -> int:
+        """Remove persisted JSONL audit files older than retention_days."""
+        if not self.log_dir or not self.log_dir.exists() or retention_days <= 0:
+            return 0
+        cutoff = time.time() - (retention_days * 86400)
+        removed = 0
+        for path in self.log_dir.glob("audit_*.jsonl"):
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink()
+                    removed += 1
+            except OSError as exc:
+                logger.warning("Could not prune expired audit log %s: %s", path, exc)
+        return removed
 
 
 # Global audit logger instance

@@ -6,9 +6,12 @@ Constructs and compiles the LangGraph state machine workflow for VulnFlow.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Callable, Dict, Optional
 
+from vulnflow.config import settings
 from vulnflow.contracts.state import VulnFlowState
+from vulnflow.orchestrator.failure_taxonomy import failure_audit_payload
 from vulnflow.orchestrator.nodes import (
     approve_node,
     dedupe_node,
@@ -41,7 +44,12 @@ class VulnFlowWorkflow:
     Can be run as a standalone deterministic state machine or compiled into a LangGraph StateGraph.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, timeout_seconds: Optional[float] = None) -> None:
+        self.timeout_seconds = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else settings.observability.workflow_timeout_seconds
+        )
         self.nodes: Dict[str, Callable[[VulnFlowState], VulnFlowState]] = {
             "ingest": ingest_node,
             "dedupe": dedupe_node,
@@ -56,14 +64,26 @@ class VulnFlowWorkflow:
             "exception": exception_node,
         }
 
-    def _run_node(self, node_name: str, st: VulnFlowState) -> VulnFlowState:
-        """Execute a node while timing and recording child span in LangSmith and local tracer."""
-        import time
-
+    def _run_node(
+        self,
+        node_name: str,
+        st: VulnFlowState,
+        deadline: Optional[float] = None,
+    ) -> VulnFlowState:
+        """Execute a node while enforcing workflow deadline and recording child span."""
+        if deadline is not None and time.monotonic() > deadline:
+            raise TimeoutError(
+                f"Workflow run {st.run_id} exceeded timeout of {self.timeout_seconds}s before '{node_name}'"
+            )
         t0 = time.time()
         err_msg: Optional[str] = None
         try:
-            return self.nodes[node_name](st)
+            result = self.nodes[node_name](st)
+            if deadline is not None and time.monotonic() > deadline:
+                raise TimeoutError(
+                    f"Workflow run {st.run_id} exceeded timeout of {self.timeout_seconds}s in '{node_name}'"
+                )
+            return result
         except Exception as exc:
             err_msg = str(exc)
             raise
@@ -122,6 +142,12 @@ class VulnFlowWorkflow:
                 },
             )
 
+            deadline = (
+                time.monotonic() + self.timeout_seconds
+                if self.timeout_seconds and self.timeout_seconds > 0
+                else None
+            )
+
             try:
                 # If resuming a paused state at approval gate, resume directly from approve
                 if state.terminal_status == "pending_approval" and state.plans:
@@ -129,18 +155,18 @@ class VulnFlowWorkflow:
                     state.terminal_status = "running"
                 else:
                     # 1. Ingest
-                    state = self._run_node("ingest", state)
+                    state = self._run_node("ingest", state, deadline=deadline)
 
                     # 2. Dedupe
-                    state = self._run_node("dedupe", state)
+                    state = self._run_node("dedupe", state, deadline=deadline)
 
                     # 3. Root cause
-                    state = self._run_node("rootcause", state)
+                    state = self._run_node("rootcause", state, deadline=deadline)
 
                     # 4. Policy check
-                    state = self._run_node("policy", state)
+                    state = self._run_node("policy", state, deadline=deadline)
                     if route_after_policy(state) == "exception":
-                        state = self._run_node("exception", state)
+                        state = self._run_node("exception", state, deadline=deadline)
                         langsmith_tracer.end_workflow_run(
                             state.run_id,
                             outputs={"terminal_status": state.terminal_status, "exit_code": state.exit_code},
@@ -149,9 +175,9 @@ class VulnFlowWorkflow:
                         return state
 
                     # 5. Plan
-                    state = self._run_node("plan", state)
+                    state = self._run_node("plan", state, deadline=deadline)
                     if route_after_plan(state) == "verify":  # Report-only mode
-                        state = self._run_node("verify", state)
+                        state = self._run_node("verify", state, deadline=deadline)
                         langsmith_tracer.end_workflow_run(
                             state.run_id,
                             outputs={"terminal_status": state.terminal_status, "exit_code": state.exit_code},
@@ -160,7 +186,7 @@ class VulnFlowWorkflow:
                         return state
 
                 # 6. Approve gate
-                state = self._run_node("approve", state)
+                state = self._run_node("approve", state, deadline=deadline)
                 approve_route = route_after_approve(state)
                 if approve_route == "pause":
                     langsmith_tracer.end_workflow_run(
@@ -170,7 +196,7 @@ class VulnFlowWorkflow:
                     )
                     return state
                 elif approve_route == "exception":
-                    state = self._run_node("exception", state)
+                    state = self._run_node("exception", state, deadline=deadline)
                     langsmith_tracer.end_workflow_run(
                         state.run_id,
                         outputs={"terminal_status": state.terminal_status, "exit_code": state.exit_code},
@@ -180,8 +206,8 @@ class VulnFlowWorkflow:
 
                 # 7. Fix & Test loop
                 while True:
-                    state = self._run_node("fix", state)
-                    state = self._run_node("test", state)
+                    state = self._run_node("fix", state, deadline=deadline)
+                    state = self._run_node("test", state, deadline=deadline)
                     route = route_after_test(state)
 
                     if route == "verify":
@@ -190,7 +216,7 @@ class VulnFlowWorkflow:
                         logger.warning("Test failed; retrying fix iteration %d", state.retry_count)
                         continue
                     else:  # route == "exception"
-                        state = self._run_node("exception", state)
+                        state = self._run_node("exception", state, deadline=deadline)
                         langsmith_tracer.end_workflow_run(
                             state.run_id,
                             outputs={"terminal_status": state.terminal_status, "exit_code": state.exit_code},
@@ -199,11 +225,11 @@ class VulnFlowWorkflow:
                         return state
 
                 # 8. Verification rescan must complete before any remote PR side effect.
-                state = self._run_node("verify", state)
+                state = self._run_node("verify", state, deadline=deadline)
 
                 # 9. Create a PR only from verified branch evidence.
                 if route_after_verify(state) == "pr":
-                    state = self._run_node("pr", state)
+                    state = self._run_node("pr", state, deadline=deadline)
 
                 findings_resolved = len({
                     finding_id
@@ -249,14 +275,20 @@ class VulnFlowWorkflow:
                     status="ERROR",
                 )
 
-                # Clean up orphan branches created during this run that don't have opened PRs (F33)
+                # Clean up orphan branches and mark any partial PRs/tickets with clear terminal status (F33)
                 from vulnflow.mcp_servers.git_server import git_server
 
                 opened_branches = {
                     pr.get("branch")
                     for pr in state.pull_requests
-                    if isinstance(pr, dict) and pr.get("branch")
+                    if isinstance(pr, dict) and pr.get("branch") and pr.get("status") == "opened"
                 }
+                for pr in state.pull_requests:
+                    if isinstance(pr, dict) and pr.get("status") != "opened":
+                        pr["terminal_status"] = "aborted_on_error"
+                if isinstance(state.exception_ticket, dict) and not state.exception_ticket.get("terminal_status"):
+                    state.exception_ticket["terminal_status"] = "run_failed_with_ticket"
+
                 cleaned_branches: list[str] = []
                 for b in getattr(state, "created_branches", []):
                     if b not in opened_branches:
@@ -268,12 +300,23 @@ class VulnFlowWorkflow:
                             logger.warning("Could not delete orphan branch %s: %s", b, c_err)
 
                 if cleaned_branches:
+                    state.created_branches = [
+                        b for b in state.created_branches if b not in cleaned_branches
+                    ]
                     state.append_audit(
                         "ORPHAN_CLEANUP",
                         "orchestrator",
-                        {"cleaned_branches": cleaned_branches},
+                        {
+                            "cleaned_branches": cleaned_branches,
+                            "partial_ticket_status": (
+                                state.exception_ticket.get("terminal_status")
+                                if isinstance(state.exception_ticket, dict)
+                                else None
+                            ),
+                        },
                     )
 
+                taxonomy = failure_audit_payload(error_message=str(exc), state=state)
                 state.append_audit(
                     "RUN_FAILED",
                     "orchestrator",
@@ -282,6 +325,7 @@ class VulnFlowWorkflow:
                         "terminal_status": state.terminal_status,
                         "exit_code": state.exit_code,
                         "error": str(exc),
+                        **taxonomy,
                     },
                 )
                 return state

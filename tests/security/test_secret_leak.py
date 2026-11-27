@@ -5,11 +5,19 @@ Validates zero-secret-leak invariants across redaction, plans, audit logs, and t
 
 from __future__ import annotations
 
+import json
+import shutil
+import tempfile
+
 from vulnflow.agents.secrets import SecretsAgent
 from vulnflow.contracts.finding import Finding, FindingType, LocationInfo, SeverityLevel
 from vulnflow.contracts.remediation_plan import RiskTier
 from vulnflow.core.redaction import contains_secrets, find_secrets, redact_secrets
-from vulnflow.observability.audit_log import audit_logger
+from vulnflow.llm.base import LLMMessage
+from vulnflow.llm.guard import RedactionGuard
+from vulnflow.observability.audit_log import AuditLogger, audit_logger
+from vulnflow.observability.langsmith_tracer import LangSmithTracer
+from vulnflow.observability.tracing import TraceManager
 
 
 def test_secret_detection_and_redaction() -> None:
@@ -85,7 +93,76 @@ def test_secrets_agent_never_leaks_raw_value() -> None:
         assert raw_secret not in payload_str, f"Raw secret leaked into audit log payload: {payload_str}"
 
 
+def test_seeded_secrets_never_leak_into_traces_audit_or_prompts() -> None:
+    """
+    Phase 4 Gate: Seeded fake secrets never survive in outbound LLM prompts,
+    OpenTelemetry/local trace spans, LangSmith trace payloads, or persistent audit logs.
+    """
+    seeded_secrets = [
+        "AKIAIOSFODNN7EXAMPLE",
+        "ghp_1234567890abcdefghijklmnopqrstuvwxyz",
+        "nvapi-1234567890abcdefghijklmnop",
+        "sk-ant-1234567890abcdefghijklmnop",
+        "postgres://svc:TopSecretPass99!@db.internal:5432/app",
+    ]
+    combined = " | ".join(seeded_secrets)
+
+    # 1. Outbound prompt guard
+    guard = RedactionGuard()
+    sanitized_msgs = guard.sanitize_messages([LLMMessage(role="user", content=combined)])
+    for secret in seeded_secrets:
+        assert secret not in sanitized_msgs[0].content
+    assert "TopSecretPass99!" not in sanitized_msgs[0].content
+
+    # 2. Local TraceManager spans and error strings
+    tm = TraceManager()
+    try:
+        with tm.span("secret.trace.test", {"raw_context": combined}):
+            raise RuntimeError(f"Failed connecting with {combined}")
+    except RuntimeError:
+        pass
+    span_dump = json.dumps(
+        [{"attrs": s.attributes, "err": s.error_message} for s in tm.spans]
+    )
+    for secret in seeded_secrets:
+        assert secret not in span_dump
+    assert "TopSecretPass99!" not in span_dump
+
+    # 3. LangSmith tracer queued payloads
+    ls = LangSmithTracer()
+    ls.enabled = True
+    ls.api_key = "test-key"
+    ls.start_workflow_run("RUN-ls-secret", inputs={"raw": combined}, metadata={"cred": combined})
+    ls.record_node_span("RUN-ls-secret", "plan", inputs={"raw": combined}, outputs={"out": combined}, error=combined)
+    ls.end_workflow_run("RUN-ls-secret", outputs={"out": combined}, error=combined)
+    queued_items = []
+    while not ls._queue.empty():
+        queued_items.append(ls._queue.get_nowait())
+    queued_dump = json.dumps(queued_items)
+    for secret in seeded_secrets:
+        assert secret not in queued_dump
+    assert "TopSecretPass99!" not in queued_dump
+
+    # 4. Persistent AuditLogger JSONL & hash chain verification
+    tmp_dir = tempfile.mkdtemp(prefix="vulnflow_sec_audit_")
+    try:
+        logger = AuditLogger(log_dir=tmp_dir)
+        ev = logger.log("RUN-audit-sec-01", "SECRET_SCAN", "scanner", {"raw": combined})
+        assert "TopSecretPass99!" not in json.dumps(ev.to_dict())
+        for secret in seeded_secrets:
+            assert secret not in json.dumps(ev.to_dict())
+        audit_file = logger.get_audit_file("RUN-audit-sec-01")
+        assert audit_file is not None
+        disk_text = audit_file.read_text(encoding="utf-8")
+        assert "TopSecretPass99!" not in disk_text
+        valid, err = logger.verify_chain("RUN-audit-sec-01")
+        assert valid is True, f"Redacted audit chain failed verification: {err}"
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 if __name__ == "__main__":
     test_secret_detection_and_redaction()
     test_secrets_agent_never_leaks_raw_value()
+    test_seeded_secrets_never_leak_into_traces_audit_or_prompts()
     print("ALL SECRET LEAK TESTS PASSED!")

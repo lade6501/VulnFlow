@@ -86,6 +86,13 @@ def delimit_untrusted_content(
     with strict defensive framing instructions for LLM ingestion.
     """
     safe_content = defang_prompt_injection(content) if detect_prompt_injection(content)[0] else content
+    # Always neutralize delimiter breakout tags even when no injection keyword matched
+    safe_content = re.sub(
+        rf"</?\s*{re.escape(tag_name)}\b[^>]*>",
+        "[ESCAPED_BOUNDARY_TAG]",
+        safe_content,
+        flags=re.IGNORECASE,
+    )
 
     return (
         f"<{tag_name}>\n"

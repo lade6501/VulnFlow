@@ -601,7 +601,9 @@ class PlannerAgent:
         for item in context.get("advisories", [])[:3]:
             if not isinstance(item, dict):
                 continue
-            raw_text = f"{item.get('title', '')} {item.get('description', '')}"
+            raw_title = redact_secrets(str(item.get("title", "")))
+            raw_desc = redact_secrets(str(item.get("description", "")))
+            raw_text = f"{raw_title} {raw_desc}"
             suspicious, patterns = detect_prompt_injection(raw_text)
             if suspicious:
                 detected.extend(patterns)
@@ -609,11 +611,15 @@ class PlannerAgent:
                 {
                     "chunk_id": str(item.get("chunk_id", "ADV"))[:200],
                     "cve": str(item.get("cve", ""))[:100],
-                    "title": str(item.get("title", ""))[:500],
+                    "title": (
+                        "[Title omitted: prompt-injection pattern detected]"
+                        if detect_prompt_injection(raw_title)[0]
+                        else raw_title[:500]
+                    ),
                     "description": (
                         "[Description omitted: prompt-injection pattern detected]"
                         if suspicious
-                        else str(item.get("description", ""))[:1200]
+                        else raw_desc[:1200]
                     ),
                     "fixed_versions": list(item.get("fixed_versions", []))[:10],
                     "references": list(item.get("references", []))[:5],
